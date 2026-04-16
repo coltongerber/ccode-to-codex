@@ -49,13 +49,16 @@ from migration_support.safety import (  # noqa: E402
     safe_provenance_value,
     validate_identifier,
 )
+from migration_support.paths import default_user_codex_home, discover_plugin_skill_names  # noqa: E402
 
 SOURCE_SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 TARGET_SKILLS_DIR = REPO_ROOT / ".codex" / "skills"
 SOURCE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 TARGET_AGENTS_DIR = REPO_ROOT / ".codex" / "agents"
+USER_CODEX_HOME = default_user_codex_home()
 GENERIC_AGENT_TYPES = {"", "general-purpose", "general_purpose", "sub-agent", "subagent"}
 PROHIBITED_FRONTMATTER_FIELDS = {"allowed-tools", "effort", "metadata"}
+SKILL_TOKEN_PATTERN = r"[a-z0-9][a-z0-9\-_]*(?::[a-z0-9][a-z0-9\-_]*)?"
 
 PRIMITIVE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     (
@@ -84,7 +87,7 @@ MAPPING_TABLE_PATTERN = re.compile(
 )
 INLINE_AGENT_PATTERN = re.compile(r"\bAgent\s*\(")
 INLINE_TASK_PATTERN = re.compile(r"\bTask\s*\(")
-SKILL_CALL_PATTERN = re.compile(r"""`?Skill\(['"]([a-z0-9][a-z0-9\-_]*)['"]\)`?""")
+SKILL_CALL_PATTERN = re.compile(rf"""`?Skill\(['"]({SKILL_TOKEN_PATTERN})['"]\)`?""")
 SKILL_REFERENCE_PATTERN = re.compile(r"`([^`\n]+)`")
 SKILL_PATH_REFERENCE_PATTERN = re.compile(
     r"\.(?:claude|codex)/skills/([a-z0-9][a-z0-9\-_]*)/",
@@ -245,16 +248,16 @@ def _known_claude_skill_names() -> set[str]:
 
 
 def _known_codex_skill_names() -> set[str]:
+    names = set(KNOWN_EXTERNAL_SKILLS)
+    names.update(discover_plugin_skill_names(codex_home=USER_CODEX_HOME, repo_root=REPO_ROOT))
     if not TARGET_SKILLS_DIR.exists():
-        return set(KNOWN_EXTERNAL_SKILLS)
-    return {
-        *KNOWN_EXTERNAL_SKILLS,
-        *(
-            path.name
-            for path in TARGET_SKILLS_DIR.iterdir()
-            if path.is_dir() and (path / "SKILL.md").exists()
-        ),
-    }
+        return names
+    names.update(
+        path.name
+        for path in TARGET_SKILLS_DIR.iterdir()
+        if path.is_dir() and (path / "SKILL.md").exists()
+    )
+    return names
 
 
 def _find_named_agent_mentions(line: str) -> list[str]:

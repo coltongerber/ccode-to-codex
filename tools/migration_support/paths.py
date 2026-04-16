@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -37,3 +40,61 @@ def archived_tracker_file_path(repo_root: Path | None = None) -> Path:
     """Return the archived migration tracker JSON path."""
     root = repo_root or find_repo_root()
     return root / "migration-state.archived.json"
+
+
+def default_user_codex_home() -> Path:
+    """Return the user's active Codex home directory."""
+    override = os.environ.get("CODEX_HOME")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".codex"
+
+
+@lru_cache(maxsize=None)
+def discover_plugin_skill_names(
+    *,
+    codex_home: Path | None = None,
+    repo_root: Path | None = None,
+) -> tuple[str, ...]:
+    """Return namespaced skill ids exposed by installed Codex plugins.
+
+    Plugin skill names are returned as ``<plugin-name>:<skill-name>`` to match
+    how Claude-authored source skills often reference plugin-backed skills.
+    """
+
+    search_roots = []
+    if codex_home is not None:
+        search_roots.append(codex_home / "plugins")
+    else:
+        search_roots.append(default_user_codex_home() / "plugins")
+    if repo_root is not None:
+        search_roots.append(repo_root / ".agents" / "plugins")
+
+    discovered: set[str] = set()
+    for plugins_root in search_roots:
+        if not plugins_root.exists():
+            continue
+        for manifest_path in sorted(plugins_root.rglob(".codex-plugin/plugin.json")):
+            plugin_root = manifest_path.parent.parent
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            plugin_name = payload.get("name")
+            if not isinstance(plugin_name, str) or not plugin_name.strip():
+                plugin_name = plugin_root.name
+
+            skills_rel = payload.get("skills")
+            skill_root = plugin_root / skills_rel if isinstance(skills_rel, str) else plugin_root / "skills"
+            if not skill_root.exists():
+                fallback_skill_root = plugin_root / "skills"
+                if not fallback_skill_root.exists():
+                    continue
+                skill_root = fallback_skill_root
+
+            for skill_dir in sorted(path for path in skill_root.iterdir() if path.is_dir()):
+                if (skill_dir / "SKILL.md").is_file():
+                    discovered.add(f"{plugin_name}:{skill_dir.name}")
+
+    return tuple(sorted(discovered))

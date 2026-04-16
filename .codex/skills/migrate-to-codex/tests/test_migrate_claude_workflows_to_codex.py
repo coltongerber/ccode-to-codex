@@ -43,6 +43,7 @@ def temporary_repo(
     skill_packages: dict[str, dict[str, str]],
     *,
     codex_skill_names: tuple[str, ...] = (),
+    plugin_skills: dict[str, tuple[str, ...]] | None = None,
 ):
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -50,11 +51,14 @@ def temporary_repo(
         target_skills_dir = root / ".codex" / "skills"
         claude_agents_dir = root / ".claude" / "agents"
         codex_agents_dir = root / ".codex" / "agents"
+        user_codex_home = root / "user-codex-home"
+        plugins_root = user_codex_home / "plugins"
 
         source_skills_dir.mkdir(parents=True)
         target_skills_dir.mkdir(parents=True)
         claude_agents_dir.mkdir(parents=True)
         codex_agents_dir.mkdir(parents=True)
+        plugins_root.mkdir(parents=True)
 
         for name, files in skill_packages.items():
             skill_dir = source_skills_dir / name
@@ -69,12 +73,30 @@ def temporary_repo(
             codex_skill_dir.mkdir(parents=True, exist_ok=True)
             (codex_skill_dir / "SKILL.md").write_text("# Codex skill\n", encoding="utf-8")
 
+        for plugin_name, skill_names in (plugin_skills or {}).items():
+            plugin_root = plugins_root / plugin_name
+            (plugin_root / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+            (plugin_root / ".codex-plugin" / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": plugin_name,
+                        "skills": "./skills/",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for skill_name in skill_names:
+                plugin_skill_dir = plugin_root / "skills" / skill_name
+                plugin_skill_dir.mkdir(parents=True, exist_ok=True)
+                (plugin_skill_dir / "SKILL.md").write_text("# Plugin skill\n", encoding="utf-8")
+
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(MODULE, "REPO_ROOT", root))
             stack.enter_context(patch.object(MODULE, "SOURCE_SKILLS_DIR", source_skills_dir))
             stack.enter_context(patch.object(MODULE, "TARGET_SKILLS_DIR", target_skills_dir))
             stack.enter_context(patch.object(MODULE, "SOURCE_AGENTS_DIR", claude_agents_dir))
             stack.enter_context(patch.object(MODULE, "TARGET_AGENTS_DIR", codex_agents_dir))
+            stack.enter_context(patch.object(MODULE, "USER_CODEX_HOME", user_codex_home))
             yield root
 
 
@@ -381,6 +403,30 @@ class SkillMigrationClassifierTests(unittest.TestCase):
 
         self.assertEqual(classification.status, MODULE.STATUS_MECHANICAL_SAFE)
         self.assertEqual(classification.ambiguous_references, [])
+
+    def test_plugin_backed_skill_reference_counts_as_codex_parity(self) -> None:
+        skill_packages = {
+            "main-skill": {
+                "SKILL.md": make_skill(
+                    """
+                    ## Review
+
+                    Use `superpowers:requesting-code-review` before continuing.
+                    """,
+                    name="main-skill",
+                )
+            }
+        }
+
+        with temporary_repo(
+            skill_packages,
+            plugin_skills={"superpowers": ("requesting-code-review",)},
+        ):
+            classification = MODULE.classify_skill(Path(MODULE.SOURCE_SKILLS_DIR) / "main-skill")
+
+        self.assertEqual(classification.status, MODULE.STATUS_MECHANICAL_SAFE)
+        self.assertEqual(classification.referenced_skills, ["superpowers:requesting-code-review"])
+        self.assertEqual(classification.missing_skills, [])
 
     def test_manual_review_required_does_not_write_output(self) -> None:
         skill_packages = {
