@@ -23,10 +23,9 @@ import json
 import os
 import re
 import shutil
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-
-import sys
 
 import yaml
 
@@ -959,7 +958,10 @@ def migrate_skill(
     target_skills_dir: Path | None = None,
     emit_text: bool = True,
 ) -> MigrationResult:
-    validate_artifact_name(skill)
+    try:
+        validate_artifact_name(skill)
+    except ValueError as exc:
+        raise FileNotFoundError(str(exc)) from exc
     src = SOURCE_SKILLS_DIR / skill
     dst_root = target_skills_dir or TARGET_SKILLS_DIR
     dst = dst_root / skill

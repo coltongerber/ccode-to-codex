@@ -935,7 +935,19 @@ def prepare_migration(
     available_mcp_servers: list[str],
 ) -> PreparedMigration:
     """Build a migration result and MCP dependency status without writing files."""
-    validate_artifact_name(name)
+    try:
+        validate_artifact_name(name)
+    except ValueError:
+        print(f"ERROR: Invalid agent name: {name!r}")
+        return PreparedMigration(
+            name=name,
+            classification=AgentClassification(
+                agent=name,
+                tier=-1,
+                readiness_score=0,
+                skip_reason=f"Invalid agent name: {name!r}",
+            ),
+        )
     src = SOURCE_AGENTS_DIR / f"{name}.md"
     if not src.exists():
         print(f"ERROR: Source not found: {src}")
