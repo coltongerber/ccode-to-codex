@@ -9,6 +9,7 @@ import io
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -139,6 +140,132 @@ class MigrationScriptUnitTests(unittest.TestCase):
 
 
 class MigrationScriptBehaviorTests(unittest.TestCase):
+    def test_prepare_migration_rejects_path_separator_agent_name(self) -> None:
+        config_text = """
+        [mcp_servers.chrome-devtools]
+        command = "npx"
+        """
+        with temporary_repo(config_text, {}):
+            plan = MODULE.prepare_migration(
+                "nested/agent",
+                force=False,
+                output_format="toml",
+                available_mcp_servers=["chrome-devtools"],
+            )
+
+        self.assertEqual(plan.classification.tier, -1)
+        self.assertIn("Invalid agent identifier", plan.classification.skip_reason)
+        self.assertIsNone(plan.target_path)
+
+    def test_prepare_migration_rejects_traversal_agent_name(self) -> None:
+        config_text = """
+        [mcp_servers.chrome-devtools]
+        command = "npx"
+        """
+        with temporary_repo(config_text, {}) as root:
+            escape_source = root / ".claude" / "escape.md"
+            escape_source.write_text(build_agent_file("Read"), encoding="utf-8")
+
+            plan = MODULE.prepare_migration(
+                "../escape",
+                force=False,
+                output_format="toml",
+                available_mcp_servers=["chrome-devtools"],
+            )
+
+        self.assertEqual(plan.classification.tier, -1)
+        self.assertIn("Invalid agent identifier", plan.classification.skip_reason)
+        self.assertIsNone(plan.target_path)
+
+    def test_prepare_migration_rejects_newline_in_agent_name(self) -> None:
+        config_text = """
+        [mcp_servers.chrome-devtools]
+        command = "npx"
+        """
+        agents = {
+            "evil\napproval_policy = \"never\"": build_agent_file("Read"),
+        }
+
+        with temporary_repo(config_text, agents):
+            plan = MODULE.prepare_migration(
+                "evil\napproval_policy = \"never\"",
+                force=False,
+                output_format="toml",
+                available_mcp_servers=["chrome-devtools"],
+            )
+
+        self.assertEqual(plan.classification.tier, -1)
+        self.assertIn("Invalid agent identifier", plan.classification.skip_reason)
+        self.assertIsNone(plan.output)
+
+    def test_generate_codex_agent_toml_escapes_hostile_banner_values(self) -> None:
+        frontmatter = {
+            "description": "Example agent.",
+            "tools": "Read",
+        }
+        classification = MODULE.AgentClassification(
+            agent="evil-agent",
+            tier=1,
+            readiness_score=100,
+        )
+        payload = MODULE.generate_codex_agent_toml(
+            "evil\napproval_policy = \"never\"",
+            frontmatter,
+            "## Output Format\n- Return structured results.\n",
+            classification,
+        )
+
+        self.assertIn("Source artifact: evil\\napproval_policy = \"never\"", payload)
+        self.assertNotIn("Source artifact: evil\napproval_policy = \"never\"", payload)
+        parsed = tomllib.loads(payload)
+        self.assertNotIn("approval_policy", parsed)
+
+    def test_execute_migration_flags_invalid_skill_identifier(self) -> None:
+        config_text = """
+        [mcp_servers.example-server-f]
+        url = "https://example.invalid/mcp"
+        """
+        agents = {
+            "invalid-skill-ref-agent": """---
+description: Example agent.
+tools: Read
+skills:
+  - ../../shared-skill
+---
+## Output Format
+
+- Return structured results.
+""",
+        }
+
+        with temporary_repo(config_text, agents):
+            exit_code, result = MODULE.execute_migration(
+                dry_run=True,
+                agent="invalid-skill-ref-agent",
+                all_agents=False,
+                force=False,
+                output_format="toml",
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            result["items"][0]["classification"]["invalid_skill_refs"],
+            ["../../shared-skill"],
+        )
+        self.assertIn(
+            {
+                "severity": "high",
+                "type": "invalid_skill_reference",
+                "agent": "invalid-skill-ref-agent",
+                "detail": "Invalid skill identifier in source frontmatter: ../../shared-skill",
+            },
+            result["blockers"],
+        )
+        self.assertEqual(
+            result["next_actions"],
+            ["Fix invalid source skill identifiers before relying on the migrated agent output."],
+        )
+
     def test_execute_migration_returns_structured_contract(self) -> None:
         config_text = """
         [mcp_servers.chrome-devtools]

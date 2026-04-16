@@ -79,6 +79,98 @@ def temporary_repo(
 
 
 class SkillMigrationClassifierTests(unittest.TestCase):
+    def test_invalid_skill_identifier_with_path_separator_blocks_migration(self) -> None:
+        skill_packages = {
+            "safe-skill": {
+                "SKILL.md": make_skill("# Safe Skill", name="safe-skill")
+            }
+        }
+
+        with temporary_repo(skill_packages):
+            result = MODULE.migrate_skill(
+                "nested/skill",
+                dry_run=True,
+                analysis_only=False,
+                emit_text=False,
+            )
+
+        self.assertEqual(result.status, MODULE.STATUS_BLOCKED)
+        self.assertIn("Invalid skill identifier", result.classification.findings[0].trigger)
+
+    def test_invalid_skill_identifier_blocks_migration(self) -> None:
+        skill_packages = {
+            "safe-skill": {
+                "SKILL.md": make_skill("# Safe Skill", name="safe-skill")
+            }
+        }
+
+        with temporary_repo(skill_packages):
+            result = MODULE.migrate_skill(
+                "../escape",
+                dry_run=True,
+                analysis_only=False,
+                emit_text=False,
+            )
+
+        self.assertEqual(result.status, MODULE.STATUS_BLOCKED)
+        self.assertIn("Invalid skill identifier", result.classification.findings[0].trigger)
+
+    def test_symlinked_source_file_blocks_migration(self) -> None:
+        skill_packages = {
+            "demo-skill": {
+                "SKILL.md": make_skill("# Demo Skill", name="demo-skill"),
+            }
+        }
+
+        with temporary_repo(skill_packages) as root:
+            skill_dir = root / ".claude" / "skills" / "demo-skill"
+            secret = root / "secret.txt"
+            secret.write_text("TOP-SECRET", encoding="utf-8")
+            (skill_dir / "references-link.txt").symlink_to(secret)
+
+            result = MODULE.migrate_skill(
+                "demo-skill",
+                dry_run=False,
+                analysis_only=False,
+                emit_text=False,
+            )
+
+            self.assertEqual(result.status, MODULE.STATUS_BLOCKED)
+            self.assertIn("symlinked source file detected", result.classification.findings[0].trigger)
+            self.assertFalse((root / ".codex" / "skills" / "demo-skill").exists())
+
+    def test_symlinked_markdown_source_file_blocks_migration(self) -> None:
+        skill_packages = {
+            "demo-skill": {
+                "SKILL.md": make_skill("# Demo Skill", name="demo-skill"),
+                "references/guide.md": "# Local guide\n",
+            }
+        }
+
+        with temporary_repo(skill_packages) as root:
+            skill_dir = root / ".claude" / "skills" / "demo-skill"
+            secret = root / "secret.md"
+            secret.write_text("# Secret", encoding="utf-8")
+            (skill_dir / "references" / "guide.md").unlink()
+            (skill_dir / "references" / "guide.md").symlink_to(secret)
+
+            result = MODULE.migrate_skill(
+                "demo-skill",
+                dry_run=False,
+                analysis_only=False,
+                emit_text=False,
+            )
+
+            self.assertEqual(result.status, MODULE.STATUS_BLOCKED)
+            self.assertIn("symlinked source file detected", result.classification.findings[0].trigger)
+            self.assertFalse((root / ".codex" / "skills" / "demo-skill").exists())
+
+    def test_make_banner_escapes_hostile_source_names(self) -> None:
+        banner = MODULE.make_banner(Path("/tmp/repo/.claude/skills/safe-skill/evil-->\n# injected.md"))
+
+        self.assertIn("Source artifact: evil--\\>\\n# injected.md", banner)
+        self.assertNotIn("Source artifact: evil-->\n# injected.md", banner)
+
     def test_redirected_skill_short_circuits_explicit_analysis(self) -> None:
         skill_packages = {
             "example-history-skill": {

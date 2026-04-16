@@ -13,6 +13,7 @@ import json
 import re
 import shlex
 import shutil
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +31,12 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
+_SUPPORT_SRC = REPO_ROOT / "tools"
+if str(_SUPPORT_SRC) not in sys.path:
+    sys.path.insert(0, str(_SUPPORT_SRC))
+
+from migration_support.safety import describe_path_for_display as shared_describe_path_for_display  # noqa: E402
+
 DEFAULT_SCAN_DIRS = (
     REPO_ROOT / ".codex" / "skills",
     REPO_ROOT / ".codex" / "agents",
@@ -143,6 +150,17 @@ MIGRATION_FAMILY_SKILLS = {
 PLACEHOLDER_OR_GLOB_PATTERN = re.compile(r"[*?{}\[\]<>]")
 SHELL_BUILTIN_COMMANDS = {"echo", "printf", "test", "true", "false", "[", "[["}
 SCRIPT_INTERPRETERS = {"node", "python", "python3", "bash", "sh", "zsh"}
+
+
+def describe_path_for_display(path: Path, *, codex_home: Path | None = None) -> str:
+    named_roots: tuple[tuple[str, Path], ...] = ()
+    if codex_home is not None:
+        named_roots = (("codex-home", codex_home),)
+    return shared_describe_path_for_display(
+        path,
+        repo_root=REPO_ROOT,
+        named_roots=named_roots,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -568,6 +586,15 @@ def _is_operator_path_candidate(token: str, line: str) -> bool:
     )
 
 
+def _repo_relative_operator_hint(token: str) -> str | None:
+    stripped = token.lstrip("/")
+    if stripped.startswith(REPO_OPERATOR_PATH_PREFIXES) or stripped.startswith(
+        SKILL_LOCAL_OPERATOR_PATH_PREFIXES
+    ):
+        return stripped
+    return None
+
+
 def _operator_path_exists(path: Path, token: str) -> bool:
     skill_root = skill_root_for_path(path)
     if token.startswith(SKILL_LOCAL_OPERATOR_PATH_PREFIXES) and skill_root is not None:
@@ -575,8 +602,6 @@ def _operator_path_exists(path: Path, token: str) -> bool:
             return True
     if token.startswith(("./", "../")):
         return (path.parent / token).resolve().exists()
-    if token.startswith("/"):
-        return Path(token).exists()
     return (REPO_ROOT / token).exists()
 
 
@@ -594,11 +619,18 @@ def validate_operator_guidance(files: list[Path]) -> tuple[list[str], list[str]]
                 if not _is_operator_path_candidate(token, line):
                     continue
 
-                if token.startswith("/.codex/") and (REPO_ROOT / token.lstrip("/")).exists():
-                    errors.append(
-                        f"{path.as_posix()}:{line_number}: operator path uses filesystem root; "
-                        f"use `{token.lstrip('/')}` instead"
-                    )
+                if token.startswith("/"):
+                    hint = _repo_relative_operator_hint(token)
+                    if hint is not None:
+                        errors.append(
+                            f"{path.as_posix()}:{line_number}: operator path uses filesystem root; "
+                            f"use `{hint}` instead"
+                        )
+                    else:
+                        errors.append(
+                            f"{path.as_posix()}:{line_number}: operator path must be repo-relative "
+                            f"or skill-local, not filesystem-absolute: `{token}`"
+                        )
                     continue
 
                 if _operator_path_exists(path, token):
@@ -840,6 +872,29 @@ def _resolve_relative_command_path(token: str, codex_home: Path) -> Path:
     return codex_home / candidate
 
 
+def _display_command_token(token: str, codex_home: Path) -> str:
+    if token.startswith(("/", "./", "../")):
+        return describe_path_for_display(
+            _resolve_relative_command_path(token, codex_home),
+            codex_home=codex_home,
+        )
+    return token
+
+
+def _display_command(command: str, codex_home: Path) -> str:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+    display_parts = [
+        _display_command_token(part, codex_home)
+        if part.startswith(("/", "./", "../"))
+        else part
+        for part in parts
+    ]
+    return " ".join(display_parts)
+
+
 def _check_hook_command(command: str, codex_home: Path) -> tuple[str, str, str] | None:
     try:
         parts = shlex.split(command)
@@ -851,10 +906,19 @@ def _check_hook_command(command: str, codex_home: Path) -> tuple[str, str, str] 
     executable = parts[0]
     if executable.startswith(("/", "./", "../")):
         executable_path = _resolve_relative_command_path(executable, codex_home)
+        display_executable = _display_command_token(executable, codex_home)
         if not executable_path.exists():
-            return ("hook-command", "warn", f"hook executable path is missing: {executable}")
+            return (
+                "hook-command",
+                "warn",
+                f"hook executable path is missing: {display_executable}",
+            )
         if not executable_path.is_file():
-            return ("hook-command", "warn", f"hook executable path is not a file: {executable}")
+            return (
+                "hook-command",
+                "warn",
+                f"hook executable path is not a file: {display_executable}",
+            )
     elif shutil.which(executable) is None:
         return ("hook-command", "warn", f"hook executable is not on PATH: {executable}")
 
@@ -863,8 +927,13 @@ def _check_hook_command(command: str, codex_home: Path) -> tuple[str, str, str] 
         if script_token.startswith("-") or "://" in script_token:
             return None
         script_path = _resolve_relative_command_path(script_token, codex_home)
+        display_script = _display_command_token(script_token, codex_home)
         if not script_path.exists():
-            return ("hook-command", "warn", f"hook script path is missing: {script_token}")
+            return (
+                "hook-command",
+                "warn",
+                f"hook script path is missing: {display_script}",
+            )
     return None
 
 
@@ -874,20 +943,21 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
 
     config_path = codex_home / "config.toml"
     if config_path.exists():
+        display_config_path = describe_path_for_display(config_path, codex_home=codex_home)
         config, error = _read_toml(config_path)
         if error:
             _environment_check(
                 checks,
                 name="codex-config",
                 status="fail",
-                detail=f"{config_path}: invalid TOML: {error}",
+                detail=f"{display_config_path}: invalid TOML: {error}",
             )
         else:
             _environment_check(
                 checks,
                 name="codex-config",
                 status="pass",
-                detail=f"{config_path}: TOML parsed",
+                detail=f"{display_config_path}: TOML parsed",
             )
             mcp_servers = config.get("mcp_servers", {}) if isinstance(config, dict) else {}
             if isinstance(mcp_servers, dict):
@@ -897,6 +967,7 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
                     command = server_config.get("command")
                     if not isinstance(command, str) or not command:
                         continue
+                    display_command = _display_command_token(command, codex_home)
                     if command.startswith(("/", "./", "../")):
                         command_path = _resolve_relative_command_path(command, codex_home)
                         missing = not command_path.exists()
@@ -907,9 +978,9 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
                         name="mcp-command",
                         status="warn" if missing else "pass",
                         detail=(
-                            f"{server_name}: command not found: {command}"
+                            f"{server_name}: command not found: {display_command}"
                             if missing
-                            else f"{server_name}: command available: {command}"
+                            else f"{server_name}: command available: {display_command}"
                         ),
                         strict_promotes_warning=True,
                     )
@@ -918,26 +989,30 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
             checks,
             name="codex-config",
             status="warn",
-            detail=f"{config_path}: config not found",
+            detail=(
+                f"{describe_path_for_display(config_path, codex_home=codex_home)}: "
+                "config not found"
+            ),
             strict_promotes_warning=True,
         )
 
     hooks_path = codex_home / "hooks.json"
     if hooks_path.exists():
+        display_hooks_path = describe_path_for_display(hooks_path, codex_home=codex_home)
         hooks_payload, error = _read_json(hooks_path)
         if error:
             _environment_check(
                 checks,
                 name="hooks-config",
                 status="fail",
-                detail=f"{hooks_path}: invalid JSON: {error}",
+                detail=f"{display_hooks_path}: invalid JSON: {error}",
             )
         else:
             _environment_check(
                 checks,
                 name="hooks-config",
                 status="pass",
-                detail=f"{hooks_path}: JSON parsed",
+                detail=f"{display_hooks_path}: JSON parsed",
             )
             for command in _iter_hook_commands(hooks_payload):
                 hook_issue = _check_hook_command(command, codex_home)
@@ -946,7 +1021,7 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
                         checks,
                         name="hook-command",
                         status="pass",
-                        detail=f"hook command looks runnable: {command}",
+                        detail=f"hook command looks runnable: {_display_command(command, codex_home)}",
                     )
                 else:
                     name, status, detail = hook_issue
@@ -963,6 +1038,10 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
     ):
         if not instruction_path.exists():
             continue
+        display_instruction_path = describe_path_for_display(
+            instruction_path,
+            codex_home=codex_home,
+        )
         try:
             size_bytes = instruction_path.stat().st_size
             text = instruction_path.read_text(encoding="utf-8")
@@ -971,7 +1050,7 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
                 checks,
                 name="instructions",
                 status="warn",
-                detail=f"{instruction_path}: could not inspect instructions: {exc}",
+                detail=f"{display_instruction_path}: could not inspect instructions: {exc}",
                 strict_promotes_warning=True,
             )
             continue
@@ -979,7 +1058,7 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
             checks,
             name="instructions-size",
             status="warn" if size_bytes > 32768 else "pass",
-            detail=f"{instruction_path}: {size_bytes} bytes",
+            detail=f"{display_instruction_path}: {size_bytes} bytes",
             strict_promotes_warning=True,
         )
         if "CLAUDE.md" in text or ".claude/" in text:
@@ -987,7 +1066,7 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
                 checks,
                 name="instructions-legacy-reference",
                 status="warn",
-                detail=f"{instruction_path}: contains legacy Claude-oriented references",
+                detail=f"{display_instruction_path}: contains legacy Claude-oriented references",
                 strict_promotes_warning=True,
             )
 
@@ -999,20 +1078,24 @@ def build_environment_readiness_report(codex_home: Path | None = None) -> dict[s
         if marketplace_path.exists():
             manifest_paths.append(marketplace_path)
         for manifest_path in sorted(manifest_paths):
+            display_manifest_path = describe_path_for_display(
+                manifest_path,
+                codex_home=codex_home,
+            )
             _, error = _read_json(manifest_path)
             _environment_check(
                 checks,
                 name="plugin-manifest",
                 status="fail" if error else "pass",
                 detail=(
-                    f"{manifest_path}: invalid JSON: {error}"
+                    f"{display_manifest_path}: invalid JSON: {error}"
                     if error
-                    else f"{manifest_path}: JSON parsed"
+                    else f"{display_manifest_path}: JSON parsed"
                 ),
             )
 
     return {
-        "codex_home": str(codex_home),
+        "codex_home": describe_path_for_display(codex_home, codex_home=codex_home),
         "state": _environment_state(checks),
         "checks": checks,
         "failures": sum(1 for check in checks if check["status"] == "fail"),

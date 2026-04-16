@@ -32,6 +32,7 @@ if str(_SUPPORT_SRC) not in sys.path:
     sys.path.insert(0, str(_SUPPORT_SRC))
 
 from migration_support import nativeness  # noqa: E402
+from migration_support.safety import describe_path_for_display  # noqa: E402
 
 MIGRATOR_PATH = Path(__file__).with_name("migrate_claude_workflows_to_codex.py")
 DOCTOR_PATH = Path(__file__).with_name("migration_doctor.py")
@@ -151,6 +152,15 @@ def _run_tracker_write() -> tuple[bool, str]:
 def _tracker_command() -> str:
     tracker_script = REPO_ROOT / "tools" / "migration_support" / "tracker.py"
     return f"python3 {tracker_script.relative_to(REPO_ROOT)}"
+
+
+def _display_path(path: Path | None, *, preview_root: Path | None = None) -> str | None:
+    if path is None:
+        return None
+    named_roots: tuple[tuple[str, Path], ...] = ()
+    if preview_root is not None:
+        named_roots = (("preview-root", preview_root),)
+    return describe_path_for_display(path, repo_root=REPO_ROOT, named_roots=named_roots)
 
 
 def _dashboard_status_text() -> str | None:
@@ -336,8 +346,8 @@ def _write_report(
                 "",
                 "## Preview Output",
                 "",
-                f"- Preview root: `{preview_root}`",
-                f"- Preview skills root: `{preview_root / '.codex' / 'skills'}`",
+                f"- Preview root: `{_display_path(preview_root, preview_root=preview_root)}`",
+                f"- Preview skills root: `{_display_path(preview_root / '.codex' / 'skills', preview_root=preview_root)}`",
             ]
         )
 
@@ -460,8 +470,8 @@ def run_workflow(
         "validation": validation_results,
         "preview": {
             "enabled": preview,
-            "root": str(preview_root) if preview_root else None,
-            "skills_root": str(target_root),
+            "root": _display_path(preview_root, preview_root=preview_root),
+            "skills_root": _display_path(target_root, preview_root=preview_root),
         },
         "tracker": {
             "updated": tracker_updated,
@@ -469,7 +479,7 @@ def run_workflow(
         },
         "nativeness_review": nativeness_review,
         "environment_readiness": doctor_report["environment_readiness"],
-        "report_path": str(report_path),
+        "report_path": _display_path(report_path, preview_root=preview_root),
     }
 
 
