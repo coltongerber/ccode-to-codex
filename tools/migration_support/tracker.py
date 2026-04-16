@@ -12,10 +12,9 @@ from pathlib import Path
 
 _SUPPORT_ROOT = Path(__file__).resolve().parents[1]
 if str(_SUPPORT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SUPPORT_ROOT))
+    sys.path.append(str(_SUPPORT_ROOT))
 
 from migration_support import tracker_cli as _tracker_cli  # noqa: E402
-from migration_support.tracker_cli import *  # noqa: E402, F403
 
 
 def main(argv: list[str] | None = None) -> int:

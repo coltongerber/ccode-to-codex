@@ -80,11 +80,13 @@ REPO_ROOT = _find_repo_root()
 
 # Import shared migration support primitives
 _SUPPORT_SRC = REPO_ROOT / "tools"
-sys.path.insert(0, str(_SUPPORT_SRC))
+if str(_SUPPORT_SRC) not in sys.path:
+    sys.path.append(str(_SUPPORT_SRC))
 from migration_support.primitives import (  # noqa: E402
     apply_primitive_mappings,
     normalize_mcp_namespaces,
 )
+from migration_support.sanitize import validate_artifact_name  # noqa: E402
 
 SOURCE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 TARGET_AGENTS_DIR = REPO_ROOT / ".codex" / "agents"
@@ -933,6 +935,7 @@ def prepare_migration(
     available_mcp_servers: list[str],
 ) -> PreparedMigration:
     """Build a migration result and MCP dependency status without writing files."""
+    validate_artifact_name(name)
     src = SOURCE_AGENTS_DIR / f"{name}.md"
     if not src.exists():
         print(f"ERROR: Source not found: {src}")

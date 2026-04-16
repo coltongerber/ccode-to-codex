@@ -26,6 +26,8 @@ import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import sys
+
 import yaml
 
 
@@ -39,6 +41,12 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
+
+# Import shared sanitization helper
+_SUPPORT_SRC = REPO_ROOT / "tools"
+if str(_SUPPORT_SRC) not in sys.path:
+    sys.path.append(str(_SUPPORT_SRC))
+from migration_support.sanitize import validate_artifact_name  # noqa: E402
 SOURCE_SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 TARGET_SKILLS_DIR = REPO_ROOT / ".codex" / "skills"
 SOURCE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
@@ -951,6 +959,7 @@ def migrate_skill(
     target_skills_dir: Path | None = None,
     emit_text: bool = True,
 ) -> MigrationResult:
+    validate_artifact_name(skill)
     src = SOURCE_SKILLS_DIR / skill
     dst_root = target_skills_dir or TARGET_SKILLS_DIR
     dst = dst_root / skill

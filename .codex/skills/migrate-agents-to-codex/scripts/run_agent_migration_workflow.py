@@ -32,7 +32,7 @@ def _find_repo_root() -> Path:
 REPO_ROOT = _find_repo_root()
 _SUPPORT_SRC = REPO_ROOT / "tools"
 if str(_SUPPORT_SRC) not in sys.path:
-    sys.path.insert(0, str(_SUPPORT_SRC))
+    sys.path.append(str(_SUPPORT_SRC))
 
 from migration_support import nativeness  # noqa: E402
 
