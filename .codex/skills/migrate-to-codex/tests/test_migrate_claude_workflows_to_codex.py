@@ -101,6 +101,54 @@ def temporary_repo(
 
 
 class SkillMigrationClassifierTests(unittest.TestCase):
+    def test_same_batch_cycle_does_not_block_missing_skills(self) -> None:
+        skill_packages = {
+            "phase-worker": {
+                "SKILL.md": make_skill(
+                    """
+                    Use Skill('phase-reviewer') before continuing.
+                    """,
+                    name="phase-worker",
+                )
+            },
+            "phase-reviewer": {
+                "SKILL.md": make_skill(
+                    """
+                    Return to Skill('phase-worker') after review.
+                    """,
+                    name="phase-reviewer",
+                )
+            },
+        }
+
+        with temporary_repo(skill_packages):
+            plan = MODULE.plan_skill_batch(["phase-worker"])
+
+        self.assertEqual(plan.requested_skills, ["phase-worker"])
+        self.assertEqual(plan.expanded_skills, ["phase-reviewer", "phase-worker"])
+        self.assertEqual(plan.blocked_skills, [])
+        self.assertEqual(plan.cycles, [["phase-reviewer", "phase-worker"]])
+
+    def test_single_skill_request_expands_to_required_source_dependencies(self) -> None:
+        skill_packages = {
+            "phase-worker": {
+                "SKILL.md": make_skill(
+                    """
+                    Use Skill('phase-reviewer') before continuing.
+                    """,
+                    name="phase-worker",
+                )
+            },
+            "phase-reviewer": {
+                "SKILL.md": make_skill("# review", name="phase-reviewer")
+            },
+        }
+
+        with temporary_repo(skill_packages):
+            plan = MODULE.plan_skill_batch(["phase-worker"])
+
+        self.assertEqual(plan.expanded_skills, ["phase-reviewer", "phase-worker"])
+
     def test_invalid_skill_identifier_with_path_separator_blocks_migration(self) -> None:
         skill_packages = {
             "safe-skill": {
