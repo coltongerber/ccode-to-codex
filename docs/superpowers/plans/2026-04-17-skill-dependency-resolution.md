@@ -28,7 +28,7 @@
 - Test: `.codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 - Test: `.codex/skills/migrate-to-codex/tests/test_codex_runtime_installation.py`
 
-- [ ] **Step 1: Write the failing dependency-resolution tests**
+- [x] **Step 1: Write the failing dependency-resolution tests**
 
 ```python
     def test_same_batch_cycle_does_not_block_missing_skills(self) -> None:
@@ -80,13 +80,13 @@
         self.assertEqual(plan.expanded_skills, ["phase-reviewer", "phase-worker"])
 ```
 
-- [ ] **Step 2: Run the resolver tests to verify they fail**
+- [x] **Step 2: Run the resolver tests to verify they fail**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 
 Expected: `AttributeError` for missing `plan_skill_batch` or assertion failures showing same-batch dependencies still land in `missing_skills`.
 
-- [ ] **Step 3: Write the failing runtime-installation tests**
+- [x] **Step 3: Write the failing runtime-installation tests**
 
 ```python
 class CodexRuntimeInstallationTests(unittest.TestCase):
@@ -111,13 +111,13 @@ class CodexRuntimeInstallationTests(unittest.TestCase):
             self.assertIn("superpowers@openai-curated", (codex_home / "config.toml").read_text(encoding="utf-8"))
 ```
 
-- [ ] **Step 4: Run the runtime tests to verify they fail**
+- [x] **Step 4: Run the runtime tests to verify they fail**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_codex_runtime_installation.py`
 
 Expected: import failure or missing symbol errors for `RuntimeInstallPlan` and `install_runtime_assets`.
 
-- [ ] **Step 5: Commit the failing-test baseline**
+- [x] **Step 5: Commit the failing-test baseline**
 
 ```bash
 git add .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py \
@@ -133,7 +133,7 @@ git commit -m "test: cover cyclic skill dependencies and runtime installation"
 - Modify: `tools/migration_support/__init__.py`
 - Test: `.codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 
-- [ ] **Step 1: Add the failing support-module imports**
+- [x] **Step 1: Add the failing support-module imports**
 
 ```python
 from migration_support.skill_dependencies import (
@@ -145,7 +145,7 @@ from migration_support.skill_dependencies import (
 from migration_support.paths import discover_claude_plugin_skill_names
 ```
 
-- [ ] **Step 2: Implement Claude plugin discovery in `paths.py`**
+- [x] **Step 2: Implement Claude plugin discovery in `paths.py`**
 
 ```python
 @lru_cache(maxsize=None)
@@ -175,7 +175,7 @@ def discover_claude_plugin_skill_names(*, claude_home: Path | None = None) -> tu
     return tuple(sorted(discovered))
 ```
 
-- [ ] **Step 3: Implement batch and graph planning in `skill_dependencies.py`**
+- [x] **Step 3: Implement batch and graph planning in `skill_dependencies.py`**
 
 ```python
 @dataclass(frozen=True)
@@ -235,13 +235,13 @@ def strongly_connected_components(edges: dict[str, set[str]]) -> list[list[str]]
     return components
 ```
 
-- [ ] **Step 4: Re-run the dependency tests to verify the shared planner satisfies them**
+- [x] **Step 4: Re-run the dependency tests to verify the shared planner satisfies them**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 
 Expected: the new planner tests pass, while integration tests still fail because the migrator has not adopted the planner yet.
 
-- [ ] **Step 5: Commit the shared dependency planner**
+- [x] **Step 5: Commit the shared dependency planner**
 
 ```bash
 git add tools/migration_support/paths.py \
@@ -259,7 +259,7 @@ git commit -m "feat: add shared skill dependency planner"
 - Create: `.codex/skills/migrate-to-codex/tests/test_codex_runtime_installation.py`
 - Test: `.codex/skills/migrate-to-codex/tests/test_codex_runtime_installation.py`
 
-- [ ] **Step 1: Add the runtime data structures and merge helpers**
+- [x] **Step 1: Add the runtime data structures and merge helpers**
 
 ```python
 @dataclass(frozen=True)
@@ -284,7 +284,7 @@ def merge_plugin_config(existing: dict[str, object], plugin_updates: dict[str, d
     return updated
 ```
 
-- [ ] **Step 2: Implement file copy, hook merge, and TOML write paths**
+- [x] **Step 2: Implement file copy, hook merge, and TOML write paths**
 
 ```python
 def install_runtime_assets(plan: RuntimeInstallPlan, *, codex_home: Path, dry_run: bool) -> None:
@@ -308,7 +308,7 @@ def install_runtime_assets(plan: RuntimeInstallPlan, *, codex_home: Path, dry_ru
     config_path.write_text(_dump_simple_toml(config_payload), encoding="utf-8")
 ```
 
-- [ ] **Step 3: Add redaction-safe assertions to the runtime tests**
+- [x] **Step 3: Add redaction-safe assertions to the runtime tests**
 
 ```python
     def test_install_runtime_assets_is_idempotent(self) -> None:
@@ -332,13 +332,13 @@ def install_runtime_assets(plan: RuntimeInstallPlan, *, codex_home: Path, dry_ru
         self.assertNotIn("audpbr25", repr(plan))
 ```
 
-- [ ] **Step 4: Run the runtime tests to verify they pass**
+- [x] **Step 4: Run the runtime tests to verify they pass**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_codex_runtime_installation.py`
 
 Expected: `OK`
 
-- [ ] **Step 5: Commit the runtime installer support**
+- [x] **Step 5: Commit the runtime installer support**
 
 ```bash
 git add tools/migration_support/codex_runtime.py \
@@ -354,7 +354,7 @@ git commit -m "feat: add codex runtime asset installer"
 - Modify: `.codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 - Test: `.codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 
-- [ ] **Step 1: Add migrator-facing planner hooks**
+- [x] **Step 1: Add migrator-facing planner hooks**
 
 ```python
 from migration_support.codex_runtime import RuntimeInstallPlan, install_runtime_assets
@@ -374,7 +374,7 @@ def plan_skill_batch(requested_skills: list[str]) -> BatchPlan:
     )
 ```
 
-- [ ] **Step 2: Replace direct `missing_skills` gating with dependency resolution states**
+- [x] **Step 2: Replace direct `missing_skills` gating with dependency resolution states**
 
 ```python
 if candidate.context == SKILL_CALL_CONTEXT_OPERATIONAL:
@@ -395,7 +395,7 @@ if candidate.context == SKILL_CALL_CONTEXT_OPERATIONAL:
         planned_plugin_dependencies.add(token)
 ```
 
-- [ ] **Step 3: Apply batch migration and runtime installation during live runs**
+- [x] **Step 3: Apply batch migration and runtime installation during live runs**
 
 ```python
 batch_plan = plan_skill_batch([skill] if skill else [path.name for path in iter_source_skill_dirs()])
@@ -407,7 +407,7 @@ runtime_plan = build_runtime_install_plan(batch_plan.planned_plugin_dependencies
 install_runtime_assets(runtime_plan, codex_home=USER_CODEX_HOME, dry_run=dry_run)
 ```
 
-- [ ] **Step 4: Add integration tests for plugin fallback and batch preview output**
+- [x] **Step 4: Add integration tests for plugin fallback and batch preview output**
 
 ```python
     def test_claude_plugin_dependency_only_used_when_codex_parity_is_missing(self) -> None:
@@ -435,13 +435,13 @@ install_runtime_assets(runtime_plan, codex_home=USER_CODEX_HOME, dry_run=dry_run
         self.assertIn("cycle group", output)
 ```
 
-- [ ] **Step 5: Run the migrator test suite to verify integration**
+- [x] **Step 5: Run the migrator test suite to verify integration**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py`
 
 Expected: `OK`
 
-- [ ] **Step 6: Commit the migrator integration**
+- [x] **Step 6: Commit the migrator integration**
 
 ```bash
 git add .codex/skills/migrate-to-codex/scripts/migrate_claude_workflows_to_codex.py \
@@ -458,7 +458,7 @@ git commit -m "feat: resolve cyclic and plugin-backed skill dependencies"
 - Test: `.codex/skills/migrate-to-codex/tests/test_reporting_redaction.py`
 - Test: `.codex/skills/migrate-to-codex/tests/test_validate_skill_migration.py`
 
-- [ ] **Step 1: Add workflow assertions for dependency planning summaries**
+- [x] **Step 1: Add workflow assertions for dependency planning summaries**
 
 ```python
     def test_workflow_json_includes_cycle_and_runtime_changes(self) -> None:
@@ -476,7 +476,7 @@ git commit -m "feat: resolve cyclic and plugin-backed skill dependencies"
         self.assertEqual(payload["runtime_changes"]["files"], ["notify.sh"])
 ```
 
-- [ ] **Step 2: Add redaction assertions so runtime asset paths and secrets stay hidden**
+- [x] **Step 2: Add redaction assertions so runtime asset paths and secrets stay hidden**
 
 ```python
     def test_reporting_redacts_runtime_asset_paths(self) -> None:
@@ -490,7 +490,7 @@ git commit -m "feat: resolve cyclic and plugin-backed skill dependencies"
         self.assertNotIn("audpbr25", report)
 ```
 
-- [ ] **Step 3: Run the reporting and validator tests**
+- [x] **Step 3: Run the reporting and validator tests**
 
 Run: `python3 .codex/skills/migrate-to-codex/tests/test_run_migration_workflow.py`
 
@@ -504,13 +504,13 @@ Run: `python3 .codex/skills/migrate-to-codex/tests/test_validate_skill_migration
 
 Expected: `OK`
 
-- [ ] **Step 4: Run the full migration-skill test suite**
+- [x] **Step 4: Run the full migration-skill test suite**
 
 Run: `python3 -m unittest discover -s .codex/skills/migrate-to-codex/tests -p 'test_*.py'`
 
 Expected: all tests pass with no redaction regressions.
 
-- [ ] **Step 5: Commit the verification updates**
+- [x] **Step 5: Commit the verification updates**
 
 ```bash
 git add .codex/skills/migrate-to-codex/tests/test_run_migration_workflow.py \
