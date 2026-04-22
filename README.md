@@ -1,3 +1,5 @@
+<img width="2304" height="1128" alt="image" src="https://github.com/user-attachments/assets/6cc15c33-d3d7-41d8-bc21-f9e661250ebf" />
+
 # ccode-to-codex
 
 Experimental toolkit for migrating Claude Code skills and agents into the

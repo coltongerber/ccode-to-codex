@@ -40,16 +40,24 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
+
+# Import shared migration support primitives.
 _SUPPORT_SRC = REPO_ROOT / "tools"
 if str(_SUPPORT_SRC) not in sys.path:
-    sys.path.insert(0, str(_SUPPORT_SRC))
+    sys.path.append(str(_SUPPORT_SRC))
 
 from migration_support.safety import (  # noqa: E402
     resolve_within_root,
     safe_provenance_value,
     validate_identifier,
 )
-from migration_support.paths import default_user_codex_home, discover_plugin_skill_names  # noqa: E402
+from migration_support.paths import (  # noqa: E402
+    default_user_claude_home,
+    default_user_codex_home,
+    discover_claude_plugin_skill_names,
+    discover_plugin_skill_names,
+    find_claude_plugin_skill_dir,
+)
 from migration_support.codex_runtime import (  # noqa: E402
     RuntimeFileCopy,
     RuntimeFileWrite,
@@ -57,12 +65,6 @@ from migration_support.codex_runtime import (  # noqa: E402
     install_runtime_assets,
 )
 from migration_support.skill_dependencies import BatchPlan, build_skill_batch_plan  # noqa: E402
-from migration_support.paths import (  # noqa: E402
-    default_user_claude_home,
-    discover_claude_plugin_skill_names,
-    find_claude_plugin_skill_dir,
-)
-
 SOURCE_SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 TARGET_SKILLS_DIR = REPO_ROOT / ".codex" / "skills"
 SOURCE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
