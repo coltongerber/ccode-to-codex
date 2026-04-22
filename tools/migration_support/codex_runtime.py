@@ -207,17 +207,19 @@ def install_runtime_assets(
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
-    hooks_path = codex_home / "hooks.json"
-    hooks_payload = _read_json(hooks_path) if hooks_path.exists() else None
-    merged_hooks = merge_hook_commands(hooks_payload, plan.hook_commands)
-    _write_json(hooks_path, merged_hooks)
+    if plan.hook_commands:
+        hooks_path = codex_home / "hooks.json"
+        hooks_payload = _read_json(hooks_path) if hooks_path.exists() else None
+        merged_hooks = merge_hook_commands(hooks_payload, plan.hook_commands)
+        _write_json(hooks_path, merged_hooks)
 
-    config_path = codex_home / "config.toml"
-    existing = ""
-    if config_path.exists():
-        try:
-            existing = config_path.read_text(encoding="utf-8")
-        except OSError:
-            existing = ""
-    merged_config = merge_plugin_config_toml(existing, plan.config_plugins)
-    config_path.write_text(merged_config, encoding="utf-8")
+    if plan.config_plugins:
+        config_path = codex_home / "config.toml"
+        existing = ""
+        if config_path.exists():
+            try:
+                existing = config_path.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+        merged_config = merge_plugin_config_toml(existing, plan.config_plugins)
+        config_path.write_text(merged_config, encoding="utf-8")

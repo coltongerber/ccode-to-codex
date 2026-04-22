@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import textwrap
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_migration_workflow.py"
@@ -61,6 +62,14 @@ class RunMigrationWorkflowTests(unittest.TestCase):
                 doctor_report=make_doctor_report(),
                 results=[],
                 validation_results=[],
+                dependency_plan={
+                    "requested_skills": [],
+                    "expanded_skills": [],
+                    "blocked_skills": [],
+                    "cycles": [],
+                    "execution_groups": [],
+                },
+                runtime_changes={"applied": False, "files": [], "display_files": []},
                 preview=True,
                 preview_root=preview_root,
                 report_dir=Path(tmpdir) / "reports",
@@ -125,6 +134,52 @@ class RunMigrationWorkflowTests(unittest.TestCase):
         self.assertEqual(result["preview"]["skills_root"], "<preview-root>/.codex/skills")
         self.assertEqual(result["report_path"], "<preview-root>/migration-evidence.md")
         self.assertNotIn(str(preview_root), serialized)
+
+    def test_workflow_json_includes_cycle_and_runtime_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir) / "repo"
+            repo_root.mkdir(parents=True)
+            source_skills_dir = repo_root / ".claude" / "skills"
+            source_skills_dir.mkdir(parents=True)
+            (repo_root / ".claude" / "notify.sh").write_text("#!/bin/bash\necho notify\n", encoding="utf-8")
+
+            def write_skill(name: str, body: str) -> None:
+                skill_dir = source_skills_dir / name
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                (skill_dir / "SKILL.md").write_text(
+                    textwrap.dedent(
+                        f"""\
+                        ---
+                        name: {name}
+                        description: example
+                        ---
+
+                        {body.strip()}
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_skill("phase-worker", "Use Skill('phase-reviewer') before continuing.")
+            write_skill("phase-reviewer", "Return to Skill('phase-worker') after review.")
+
+            doctor_report = make_doctor_report()
+            doctor_report["summary"]["skills_considered"] = 2
+
+            with (
+                patch.object(MODULE, "REPO_ROOT", repo_root),
+                patch.object(MODULE.migrator, "REPO_ROOT", repo_root),
+                patch.object(MODULE.migrator, "SOURCE_SKILLS_DIR", source_skills_dir),
+                patch.object(MODULE.migrator, "TARGET_SKILLS_DIR", repo_root / ".codex" / "skills"),
+                patch.object(MODULE.migrator, "USER_CLAUDE_HOME", repo_root / ".claude"),
+                patch.object(MODULE.migrator, "USER_CODEX_HOME", repo_root / "user-codex-home"),
+                patch.object(MODULE.doctor, "build_doctor_report", return_value=doctor_report),
+            ):
+                result = MODULE.run_workflow(skill="phase-worker", preview=True, preview_dir=repo_root / "preview")
+
+            self.assertEqual(result["expanded_skills"], ["phase-reviewer", "phase-worker"])
+            self.assertEqual(result["cycles"], [["phase-reviewer", "phase-worker"]])
+            self.assertEqual(result["runtime_changes"]["files"], ["notify.sh"])
 
 
 if __name__ == "__main__":

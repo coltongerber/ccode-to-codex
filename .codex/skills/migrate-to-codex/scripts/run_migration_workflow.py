@@ -157,10 +157,56 @@ def _tracker_command() -> str:
 def _display_path(path: Path | None, *, preview_root: Path | None = None) -> str | None:
     if path is None:
         return None
-    named_roots: tuple[tuple[str, Path], ...] = ()
+    named_roots: tuple[tuple[str, Path], ...] = (("codex-home", migrator.USER_CODEX_HOME),)
     if preview_root is not None:
-        named_roots = (("preview-root", preview_root),)
+        named_roots = (("preview-root", preview_root), ("codex-home", migrator.USER_CODEX_HOME))
     return describe_path_for_display(path, repo_root=REPO_ROOT, named_roots=named_roots)
+
+
+def _display_codex_home_relative(rel: Path, *, preview_root: Path | None) -> str:
+    # Always represent CODEX_HOME as "<codex-home>" even if it happens to live inside
+    # the repository (tests often do this), to avoid leaking machine-specific paths.
+    rel_text = rel.as_posix().lstrip("/")
+    if rel_text in {"", "."}:
+        return "<codex-home>"
+    return f"<codex-home>/{rel_text}"
+
+
+def _dependency_plan(skill: str | None) -> dict[str, object]:
+    requested = [skill] if skill else [path.name for path in migrator.iter_source_skill_dirs()]
+    plan = migrator.plan_skill_batch(requested)
+    return {
+        "requested_skills": plan.requested_skills,
+        "expanded_skills": plan.expanded_skills,
+        "blocked_skills": plan.blocked_skills,
+        "cycles": plan.cycles,
+        "execution_groups": plan.execution_groups,
+    }
+
+
+def _runtime_changes(
+    *,
+    dependency_plan: dict[str, object],
+    preview: bool,
+    preview_root: Path | None,
+) -> dict[str, object]:
+    files: list[str] = []
+    display_files: list[str] = []
+
+    notify_path = (migrator.USER_CLAUDE_HOME / "notify.sh").expanduser().resolve()
+    if notify_path.is_file():
+        files.append("notify.sh")
+        display_files.append(_display_codex_home_relative(Path("notify.sh"), preview_root=preview_root))
+
+    # If any Claude plugin dependencies exist, the migrator may install them into CODEX_HOME/plugins.
+    for component in dependency_plan.get("execution_groups", []) or []:
+        _ = component
+
+    return {
+        "applied": (not preview),
+        "files": files,
+        "display_files": display_files,
+    }
 
 
 def _dashboard_status_text() -> str | None:
@@ -228,6 +274,8 @@ def _write_report(
     doctor_report: dict[str, object],
     results: list[object],
     validation_results: list[dict[str, object]],
+    dependency_plan: dict[str, object],
+    runtime_changes: dict[str, object],
     preview: bool,
     preview_root: Path | None,
     report_dir: Path,
@@ -316,6 +364,41 @@ def _write_report(
     lines.extend(
         [
             "",
+            "## Dependency Planning",
+            "",
+            "- Requested: "
+            + (", ".join(dependency_plan.get("requested_skills", []) or []) or "<none>"),
+            "- Expanded: "
+            + (", ".join(dependency_plan.get("expanded_skills", []) or []) or "<none>"),
+        ]
+    )
+    cycles = dependency_plan.get("cycles", []) or []
+    if cycles:
+        lines.append("- Cycles:")
+        for component in cycles[:10]:
+            lines.append("  - " + ", ".join(component))
+    else:
+        lines.append("- Cycles: none")
+
+    lines.extend(
+        [
+            "",
+            "## Runtime Changes",
+            "",
+            f"- Applied: {'yes' if runtime_changes.get('applied') else 'no'}",
+        ]
+    )
+    runtime_files = runtime_changes.get("display_files", []) or []
+    if runtime_files:
+        lines.append("- Files:")
+        for item in runtime_files[:20]:
+            lines.append(f"  - `{item}`")
+    else:
+        lines.append("- Files: none")
+
+    lines.extend(
+        [
+            "",
             "## Tracker / Dashboard",
             "",
             f"- Tracker updated: {'yes' if tracker_updated else 'no'}",
@@ -370,6 +453,13 @@ def run_workflow(
     )
     target_root.mkdir(parents=True, exist_ok=True)
 
+    dependency_plan = _dependency_plan(skill)
+    runtime_changes = _runtime_changes(
+        dependency_plan=dependency_plan,
+        preview=preview,
+        preview_root=preview_root,
+    )
+
     if skill:
         results = [
             migrator.migrate_skill(
@@ -422,6 +512,8 @@ def run_workflow(
         doctor_report=doctor_report,
         results=results,
         validation_results=validation_results,
+        dependency_plan=dependency_plan,
+        runtime_changes=runtime_changes,
         preview=preview,
         preview_root=preview_root,
         report_dir=report_dir or (Path(tempfile.gettempdir()) / "codex-migration-evidence"),
@@ -438,6 +530,11 @@ def run_workflow(
             "all_skills": skill is None,
             "preview": preview,
         },
+        "dependency_plan": dependency_plan,
+        "expanded_skills": dependency_plan.get("expanded_skills", []),
+        "cycles": dependency_plan.get("cycles", []),
+        "execution_groups": dependency_plan.get("execution_groups", []),
+        "runtime_changes": runtime_changes,
         "summary": {
             "readiness": doctor_report["summary"]["readiness"],
             "skills_considered": doctor_report["summary"]["skills_considered"],

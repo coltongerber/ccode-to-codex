@@ -1359,14 +1359,20 @@ def migrate_batch(
             if emit_text:
                 print("")
 
-    if install_runtime and planned_plugin_tokens and not dry_run and not analysis_only:
+    if install_runtime and not dry_run and not analysis_only:
         runtime_plan = _build_runtime_install_plan(
             plugin_skill_tokens=planned_plugin_tokens,
             claude_home=USER_CLAUDE_HOME,
         )
-        install_runtime_assets(runtime_plan, codex_home=USER_CODEX_HOME, dry_run=False)
-        # Plugin discovery is cached; clear to make future runs reflect newly installed skills.
-        discover_plugin_skill_names.cache_clear()
+        if (
+            runtime_plan.files
+            or runtime_plan.writes
+            or runtime_plan.hook_commands
+            or runtime_plan.config_plugins
+        ):
+            install_runtime_assets(runtime_plan, codex_home=USER_CODEX_HOME, dry_run=False)
+            # Plugin discovery is cached; clear to make future runs reflect newly installed skills.
+            discover_plugin_skill_names.cache_clear()
 
     return results
 
