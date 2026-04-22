@@ -378,6 +378,7 @@ def run_workflow(
                 analysis_only=False,
                 target_skills_dir=target_root,
                 emit_text=False,
+                install_runtime=not preview,
             )
         ]
     else:
@@ -386,6 +387,7 @@ def run_workflow(
             analysis_only=False,
             target_skills_dir=target_root,
             emit_text=False,
+            install_runtime=not preview,
         )
 
     written_dirs = _collect_written_skill_dirs(results, target_root)

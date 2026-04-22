@@ -50,6 +50,14 @@ def default_user_codex_home() -> Path:
     return Path.home() / ".codex"
 
 
+def default_user_claude_home() -> Path:
+    """Return the user's active Claude home directory."""
+    override = os.environ.get("CLAUDE_HOME")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".claude"
+
+
 @lru_cache(maxsize=None)
 def discover_plugin_skill_names(
     *,
@@ -98,3 +106,108 @@ def discover_plugin_skill_names(
                     discovered.add(f"{plugin_name}:{skill_dir.name}")
 
     return tuple(sorted(discovered))
+
+
+@lru_cache(maxsize=None)
+def discover_claude_plugin_skill_names(*, claude_home: Path | None = None) -> tuple[str, ...]:
+    """Return namespaced skill ids exposed by installed Claude plugins.
+
+    Claude plugin skill names are returned as ``<plugin-name>:<skill-name>`` to align
+    with how Claude-authored skills commonly reference plugin-backed skills.
+    """
+
+    root = (claude_home or default_user_claude_home()).resolve() / "plugins"
+    manifest_path = root / "installed_plugins.json"
+    if not manifest_path.exists():
+        return ()
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+
+    plugins = payload.get("installed_plugins")
+    if not isinstance(plugins, list):
+        plugins = payload.get("installedPlugins")
+    if not isinstance(plugins, list):
+        return ()
+
+    discovered: set[str] = set()
+    for plugin in plugins:
+        if not isinstance(plugin, dict):
+            continue
+        slug = plugin.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            continue
+        plugin_dir = root / slug
+
+        name = plugin.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = slug.split("@", 1)[0]
+
+        skills_root = plugin_dir / "skills"
+        if not skills_root.exists():
+            continue
+        for skill_dir in sorted(path for path in skills_root.iterdir() if path.is_dir()):
+            if (skill_dir / "SKILL.md").is_file():
+                discovered.add(f"{name}:{skill_dir.name}")
+
+    return tuple(sorted(discovered))
+
+
+def find_claude_plugin_skill_dir(
+    skill_token: str,
+    *,
+    claude_home: Path | None = None,
+) -> Path | None:
+    """Resolve a namespaced Claude plugin skill token to its on-disk directory.
+
+    Returns the directory containing ``SKILL.md`` for the referenced plugin skill, or
+    ``None`` if it cannot be located.
+    """
+
+    if ":" not in skill_token:
+        return None
+    plugin_name, skill_name = (part.strip() for part in skill_token.split(":", 1))
+    if not plugin_name or not skill_name:
+        return None
+
+    root = (claude_home or default_user_claude_home()).expanduser().resolve() / "plugins"
+    manifest_path = root / "installed_plugins.json"
+    if not manifest_path.exists():
+        return None
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    plugins = payload.get("installed_plugins")
+    if not isinstance(plugins, list):
+        plugins = payload.get("installedPlugins")
+    if not isinstance(plugins, list):
+        return None
+
+    wanted = plugin_name.lower()
+    for plugin in plugins:
+        if not isinstance(plugin, dict):
+            continue
+        slug = plugin.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            continue
+        plugin_dir = root / slug
+
+        name = plugin.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = slug.split("@", 1)[0]
+
+        normalized_name = name.strip().lower()
+        normalized_slug = slug.split("@", 1)[0].strip().lower()
+        if wanted not in {normalized_name, normalized_slug}:
+            continue
+
+        candidate = plugin_dir / "skills" / skill_name
+        if (candidate / "SKILL.md").is_file():
+            return candidate
+
+    return None

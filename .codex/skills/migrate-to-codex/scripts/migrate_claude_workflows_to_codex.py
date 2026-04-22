@@ -50,12 +50,25 @@ from migration_support.safety import (  # noqa: E402
     validate_identifier,
 )
 from migration_support.paths import default_user_codex_home, discover_plugin_skill_names  # noqa: E402
+from migration_support.codex_runtime import (  # noqa: E402
+    RuntimeFileCopy,
+    RuntimeFileWrite,
+    RuntimeInstallPlan,
+    install_runtime_assets,
+)
+from migration_support.skill_dependencies import BatchPlan, build_skill_batch_plan  # noqa: E402
+from migration_support.paths import (  # noqa: E402
+    default_user_claude_home,
+    discover_claude_plugin_skill_names,
+    find_claude_plugin_skill_dir,
+)
 
 SOURCE_SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 TARGET_SKILLS_DIR = REPO_ROOT / ".codex" / "skills"
 SOURCE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 TARGET_AGENTS_DIR = REPO_ROOT / ".codex" / "agents"
 USER_CODEX_HOME = default_user_codex_home()
+USER_CLAUDE_HOME = default_user_claude_home()
 GENERIC_AGENT_TYPES = {"", "general-purpose", "general_purpose", "sub-agent", "subagent"}
 PROHIBITED_FRONTMATTER_FIELDS = {"allowed-tools", "effort", "metadata"}
 SKILL_TOKEN_PATTERN = r"[a-z0-9][a-z0-9\-_]*(?::[a-z0-9][a-z0-9\-_]*)?"
@@ -181,6 +194,7 @@ class SkillClassification:
     missing_agents: list[str]
     referenced_skills: list[str]
     missing_skills: list[str]
+    planned_claude_plugin_skills: list[str]
     ambiguous_references: list[AmbiguousSkillReference]
 
 
@@ -260,6 +274,61 @@ def _known_codex_skill_names() -> set[str]:
     return names
 
 
+def _collect_source_skill_dependency_edges(source_skill_names: set[str]) -> dict[str, set[str]]:
+    """Collect operational source-skill dependencies between Claude skill packages."""
+    known_codex_skills = _known_codex_skill_names()
+    known_skill_names = source_skill_names | known_codex_skills
+    edges: dict[str, set[str]] = {skill: set() for skill in source_skill_names}
+
+    for skill in sorted(source_skill_names):
+        skill_dir = SOURCE_SKILLS_DIR / skill
+        if not skill_dir.exists():
+            continue
+        for markdown_file in _iter_markdown_files(skill_dir):
+            text = markdown_file.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            fenced_states = _compute_fenced_code_states(lines)
+            for line_number, line in enumerate(lines, start=1):
+                if not SKILL_CALL_PATTERN.search(line):
+                    continue
+                # Batch planning must treat `Skill('x')` invocations as dependencies even
+                # when the wording isn't caught by the operational keyword heuristic.
+                context = _classify_skill_call_context(
+                    markdown_file, lines, line_number, fenced_states
+                )
+                if context in {
+                    None,
+                    SKILL_CALL_CONTEXT_REFERENCE,
+                    SKILL_CALL_CONTEXT_EXAMPLE,
+                }:
+                    continue
+                for match in SKILL_CALL_PATTERN.finditer(line):
+                    token = match.group(1).strip()
+                    if token == skill:
+                        continue
+                    if token not in known_skill_names:
+                        continue
+                    if token not in source_skill_names:
+                        continue
+                    if token in known_codex_skills:
+                        continue
+                    edges[skill].add(token)
+
+    return edges
+
+
+def plan_skill_batch(requested_skills: list[str]) -> BatchPlan:
+    """Plan a safe migration batch for the requested source skills."""
+    source_skill_names = {path.name for path in iter_source_skill_dirs()}
+    dependency_edges = _collect_source_skill_dependency_edges(source_skill_names)
+    return build_skill_batch_plan(
+        requested_skills=list(requested_skills),
+        source_skill_names=source_skill_names,
+        dependency_edges=dependency_edges,
+        available_codex_skills=_known_codex_skill_names(),
+    )
+
+
 def _find_named_agent_mentions(line: str) -> list[str]:
     mentions: list[str] = []
     normalized_line = line.lower()
@@ -295,6 +364,7 @@ def _serialize_classification(classification: SkillClassification) -> dict[str, 
         "missing_agents": classification.missing_agents,
         "referenced_skills": classification.referenced_skills,
         "missing_skills": classification.missing_skills,
+        "planned_claude_plugin_skills": classification.planned_claude_plugin_skills,
         "ambiguous_references": [asdict(reference) for reference in classification.ambiguous_references],
     }
 
@@ -482,19 +552,28 @@ def neutralize_skill_references(text: str, src: Path) -> str:
     return "".join(transformed)
 
 
-def classify_skill(skill_dir: Path) -> SkillClassification:
+def classify_skill(
+    skill_dir: Path,
+    *,
+    batch_source_skills: set[str] | None = None,
+    claude_plugin_skills: set[str] | None = None,
+    known_codex_skills: set[str] | None = None,
+    known_claude_skills: set[str] | None = None,
+) -> SkillClassification:
     findings: list[Finding] = []
     seen_findings: set[tuple[str, str, str]] = set()
     named_agents: set[str] = set()
     missing_agents: set[str] = set()
     referenced_skills: set[str] = set()
     missing_skills: set[str] = set()
+    planned_claude_plugin_skills: set[str] = set()
     ambiguous_references: list[AmbiguousSkillReference] = []
     seen_ambiguous_references: set[tuple[str, str, int]] = set()
     has_refactor_risk = False
-    known_claude_skills = _known_claude_skill_names()
-    known_codex_skills = _known_codex_skill_names()
-    known_skill_names = known_claude_skills | known_codex_skills
+    known_claude_skills = known_claude_skills or _known_claude_skill_names()
+    known_codex_skills = known_codex_skills or _known_codex_skill_names()
+    claude_plugin_skills = claude_plugin_skills or set()
+    known_skill_names = known_claude_skills | known_codex_skills | set(claude_plugin_skills)
 
     for markdown_file in _iter_markdown_files(skill_dir):
         relative_file = markdown_file.relative_to(skill_dir).as_posix()
@@ -650,22 +729,53 @@ def classify_skill(skill_dir: Path) -> SkillClassification:
                     continue
                 if (
                     candidate.context == SKILL_CALL_CONTEXT_OPERATIONAL
-                    and token_has_claude_skill
-                    and not token_has_codex_skill
                 ):
+                    if token in KNOWN_EXTERNAL_SKILLS or token_has_codex_skill:
+                        continue
+                    if batch_source_skills and token in batch_source_skills:
+                        continue
+                    if token_has_claude_skill and not token_has_codex_skill:
+                        missing_skills.add(token)
+                        _append_finding(
+                            findings,
+                            seen_findings,
+                            category=f"missing-skill:{token}",
+                            file=f"{relative_file}:{line_number}",
+                            trigger=(
+                                f"hard skill dependency: {token} "
+                                f"(.codex/skills/{token}/ missing; only .claude/skills/{token}/ exists)"
+                            ),
+                            next_action=(
+                                "cannot proceed with migration because there is a hard dependency on "
+                                f"`{token}`. Please migrate that skill first."
+                            ),
+                        )
+                        continue
+                    if token in claude_plugin_skills:
+                        planned_claude_plugin_skills.add(token)
+                        _append_finding(
+                            findings,
+                            seen_findings,
+                            category=f"claude-plugin-skill:{token}",
+                            file=f"{relative_file}:{line_number}",
+                            trigger=f"Claude plugin skill dependency: {token}",
+                            next_action=(
+                                "this dependency can be satisfied by migrating the Claude plugin skill "
+                                "into a Codex plugin (on-demand)"
+                            ),
+                        )
+                        continue
+
                     missing_skills.add(token)
                     _append_finding(
                         findings,
                         seen_findings,
                         category=f"missing-skill:{token}",
                         file=f"{relative_file}:{line_number}",
-                        trigger=(
-                            f"hard skill dependency: {token} "
-                            f"(.codex/skills/{token}/ missing; only .claude/skills/{token}/ exists)"
-                        ),
+                        trigger=f"missing operational skill dependency: {token}",
                         next_action=(
-                            "cannot proceed with migration because there is a hard dependency on "
-                            f"`{token}`. Please migrate that skill first."
+                            "install or migrate the missing dependency, or rewrite the guidance to avoid "
+                            "an operational Skill() invocation"
                         ),
                     )
 
@@ -746,6 +856,7 @@ def classify_skill(skill_dir: Path) -> SkillClassification:
         missing_agents=sorted(missing_agents),
         referenced_skills=sorted(referenced_skills),
         missing_skills=sorted(missing_skills),
+        planned_claude_plugin_skills=sorted(planned_claude_plugin_skills),
         ambiguous_references=sorted(
             ambiguous_references,
             key=lambda reference: (reference.file, reference.line, reference.token),
@@ -981,17 +1092,95 @@ def _blocked_classification(skill: str, trigger: str, next_action: str) -> Skill
         missing_agents=[],
         referenced_skills=[],
         missing_skills=[],
+        planned_claude_plugin_skills=[],
         ambiguous_references=[],
     )
 
 
-def migrate_skill(
+def _print_batch_plan(plan: BatchPlan) -> None:
+    print("Batch plan:")
+    print(f"  Requested: {', '.join(plan.requested_skills) if plan.requested_skills else '<none>'}")
+    print(f"  Expanded: {', '.join(plan.expanded_skills) if plan.expanded_skills else '<none>'}")
+    if plan.cycles:
+        print("  Cycle groups:")
+        for component in plan.cycles:
+            print(f"    - {', '.join(component)}")
+    if plan.execution_groups:
+        print("  Execution groups:")
+        for component in plan.execution_groups:
+            print(f"    - {', '.join(component)}")
+
+
+def _plugin_token_parts(token: str) -> tuple[str, str] | None:
+    if ":" not in token:
+        return None
+    plugin, skill = (part.strip() for part in token.split(":", 1))
+    if not plugin or not skill:
+        return None
+    return plugin, skill
+
+
+def _build_runtime_install_plan(
+    *,
+    plugin_skill_tokens: set[str],
+    claude_home: Path,
+) -> RuntimeInstallPlan:
+    writes: list[RuntimeFileWrite] = []
+    copies: list[RuntimeFileCopy] = []
+    hook_commands: list[str] = []
+    config_plugins: dict[str, dict[str, object]] = {}
+
+    notify_path = claude_home / "notify.sh"
+    if notify_path.is_file():
+        copies.append(RuntimeFileCopy(source=notify_path, relative_target=Path("notify.sh")))
+        hook_commands.append("bash ~/.codex/notify.sh")
+
+    for token in sorted(plugin_skill_tokens):
+        parts = _plugin_token_parts(token)
+        if parts is None:
+            continue
+        plugin, skill = parts
+        source_dir = find_claude_plugin_skill_dir(token, claude_home=claude_home)
+        if source_dir is None:
+            raise FileNotFoundError(f"Claude plugin skill not found on disk: {token}")
+
+        plugin_root = Path("plugins") / "claude-migrated" / plugin
+        manifest_rel = plugin_root / ".codex-plugin" / "plugin.json"
+        writes.append(
+            RuntimeFileWrite(
+                relative_target=manifest_rel,
+                content=json.dumps({"name": plugin, "skills": "./skills/"}, indent=2, sort_keys=True),
+            )
+        )
+        config_plugins.setdefault(plugin, {})["enabled"] = True
+
+        for src_file in sorted(source_dir.rglob("*")):
+            if src_file.is_dir():
+                continue
+            if src_file.is_symlink():
+                raise ValueError(f"Refusing to install symlinked Claude plugin file: {src_file}")
+            rel = src_file.relative_to(source_dir)
+            target_rel = plugin_root / "skills" / skill / rel
+            copies.append(RuntimeFileCopy(source=src_file, relative_target=target_rel))
+
+    return RuntimeInstallPlan(
+        files=copies,
+        writes=writes,
+        hook_commands=hook_commands,
+        config_plugins=config_plugins,
+    )
+
+
+def _migrate_skill_once(
     skill: str,
     dry_run: bool,
     analysis_only: bool,
     *,
     target_skills_dir: Path | None = None,
     emit_text: bool = True,
+    batch_source_skills: set[str] | None = None,
+    claude_plugin_skills: set[str] | None = None,
+    planned_plugin_tokens: set[str] | None = None,
 ) -> MigrationResult:
     dst_root = target_skills_dir or TARGET_SKILLS_DIR
     invalid_skill = validate_identifier(skill, kind="skill")
@@ -1047,6 +1236,7 @@ def migrate_skill(
                 missing_agents=[],
                 referenced_skills=[],
                 missing_skills=[],
+                planned_claude_plugin_skills=[],
                 ambiguous_references=[],
             ),
         )
@@ -1069,7 +1259,13 @@ def migrate_skill(
             classification=classification,
         )
 
-    classification = classify_skill(src)
+    classification = classify_skill(
+        src,
+        batch_source_skills=batch_source_skills,
+        claude_plugin_skills=claude_plugin_skills,
+    )
+    if planned_plugin_tokens is not None:
+        planned_plugin_tokens.update(classification.planned_claude_plugin_skills)
     if emit_text:
         print_classification(classification)
 
@@ -1126,24 +1322,140 @@ def migrate_skill(
     )
 
 
+def migrate_batch(
+    requested_skills: list[str],
+    dry_run: bool,
+    analysis_only: bool,
+    *,
+    target_skills_dir: Path | None = None,
+    emit_text: bool = True,
+    install_runtime: bool = False,
+) -> list[MigrationResult]:
+    plan = plan_skill_batch(requested_skills)
+    batch_source_skills = set(plan.expanded_skills)
+    claude_plugin_skills = set(discover_claude_plugin_skill_names(claude_home=USER_CLAUDE_HOME))
+
+    if emit_text:
+        _print_batch_plan(plan)
+        print("")
+
+    dst_root = target_skills_dir or TARGET_SKILLS_DIR
+    results: list[MigrationResult] = []
+    planned_plugin_tokens: set[str] = set()
+
+    for component in plan.execution_groups:
+        for skill in component:
+            result = _migrate_skill_once(
+                skill,
+                dry_run=dry_run,
+                analysis_only=analysis_only,
+                target_skills_dir=dst_root,
+                emit_text=emit_text,
+                batch_source_skills=batch_source_skills,
+                claude_plugin_skills=claude_plugin_skills,
+                planned_plugin_tokens=planned_plugin_tokens,
+            )
+            results.append(result)
+            if emit_text:
+                print("")
+
+    if install_runtime and planned_plugin_tokens and not dry_run and not analysis_only:
+        runtime_plan = _build_runtime_install_plan(
+            plugin_skill_tokens=planned_plugin_tokens,
+            claude_home=USER_CLAUDE_HOME,
+        )
+        install_runtime_assets(runtime_plan, codex_home=USER_CODEX_HOME, dry_run=False)
+        # Plugin discovery is cached; clear to make future runs reflect newly installed skills.
+        discover_plugin_skill_names.cache_clear()
+
+    return results
+
+
+def migrate_skill(
+    skill: str,
+    dry_run: bool,
+    analysis_only: bool,
+    *,
+    target_skills_dir: Path | None = None,
+    emit_text: bool = True,
+    install_runtime: bool = False,
+) -> MigrationResult:
+    invalid_skill = validate_identifier(skill, kind="skill")
+    if invalid_skill is not None:
+        if emit_text:
+            print(f"{skill}: {STATUS_BLOCKED}")
+            print(f"  → {invalid_skill}")
+        classification = _blocked_classification(
+            skill,
+            trigger=invalid_skill,
+            next_action="rename the source skill to a safe slug before rerunning migration",
+        )
+        return MigrationResult(
+            skill=skill,
+            status=classification.status,
+            action="blocked",
+            classification=classification,
+        )
+
+    src = resolve_within_root(
+        SOURCE_SKILLS_DIR,
+        SOURCE_SKILLS_DIR / skill,
+        kind="skill source path",
+    )
+    if not src.exists():
+        raise FileNotFoundError(f"Source path does not exist: {src}")
+    skill_md = src / "SKILL.md"
+    if skill_md.exists() and is_archived_or_redirected(skill_md):
+        # Preserve existing behavior: redirected/archived short-circuit returns a single result.
+        return _migrate_skill_once(
+            skill,
+            dry_run=dry_run,
+            analysis_only=analysis_only,
+            target_skills_dir=target_skills_dir,
+            emit_text=emit_text,
+        )
+
+    symlinked_files = _find_symlinked_source_files(src)
+    if symlinked_files:
+        # Preserve existing behavior: do not migrate unrelated dependencies if the requested target is unsafe.
+        return _migrate_skill_once(
+            skill,
+            dry_run=dry_run,
+            analysis_only=analysis_only,
+            target_skills_dir=target_skills_dir,
+            emit_text=emit_text,
+        )
+
+    batch_results = migrate_batch(
+        [skill],
+        dry_run=dry_run,
+        analysis_only=analysis_only,
+        target_skills_dir=target_skills_dir,
+        emit_text=emit_text,
+        install_runtime=install_runtime,
+    )
+    for result in batch_results:
+        if result.skill == skill:
+            return result
+    raise RuntimeError(f"Requested skill {skill!r} missing from batch results")
+
+
 def migrate_all(
     dry_run: bool,
     analysis_only: bool,
     *,
     target_skills_dir: Path | None = None,
     emit_text: bool = True,
+    install_runtime: bool = False,
 ) -> list[MigrationResult]:
-    results: list[MigrationResult] = []
-    for skill_dir in iter_source_skill_dirs():
-        results.append(
-            migrate_skill(
-                skill_dir.name,
-                dry_run=dry_run,
-                analysis_only=analysis_only,
-                target_skills_dir=target_skills_dir,
-                emit_text=emit_text,
-            )
-        )
+    results = migrate_batch(
+        [path.name for path in iter_source_skill_dirs()],
+        dry_run=dry_run,
+        analysis_only=analysis_only,
+        target_skills_dir=target_skills_dir,
+        emit_text=emit_text,
+        install_runtime=install_runtime,
+    )
 
     by_status = {
         STATUS_MECHANICAL_SAFE: 0,
@@ -1211,6 +1523,12 @@ def parse_args() -> argparse.Namespace:
         dest="json_output",
         help="Emit structured JSON output instead of human-readable text.",
     )
+    parser.add_argument(
+        "--no-install-runtime",
+        action="store_true",
+        dest="no_install_runtime",
+        help="Do not install runtime assets (hooks/config/plugins) into the user's CODEX_HOME.",
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--skill",
@@ -1235,6 +1553,7 @@ def main() -> int:
             dry_run=args.dry_run,
             analysis_only=args.analysis_only,
             emit_text=not args.json_output,
+            install_runtime=not args.no_install_runtime,
         )
         if args.json_output:
             print(json.dumps(_serialize_result(result), indent=2))
@@ -1244,6 +1563,7 @@ def main() -> int:
         dry_run=args.dry_run,
         analysis_only=args.analysis_only,
         emit_text=not args.json_output,
+        install_runtime=not args.no_install_runtime,
     )
     if args.json_output:
         by_status = {

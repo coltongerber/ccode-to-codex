@@ -44,6 +44,7 @@ def temporary_repo(
     *,
     codex_skill_names: tuple[str, ...] = (),
     plugin_skills: dict[str, tuple[str, ...]] | None = None,
+    claude_plugin_skills: dict[str, tuple[str, ...]] | None = None,
 ):
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -51,6 +52,7 @@ def temporary_repo(
         target_skills_dir = root / ".codex" / "skills"
         claude_agents_dir = root / ".claude" / "agents"
         codex_agents_dir = root / ".codex" / "agents"
+        claude_home = root / ".claude"
         user_codex_home = root / "user-codex-home"
         plugins_root = user_codex_home / "plugins"
 
@@ -90,12 +92,31 @@ def temporary_repo(
                 plugin_skill_dir.mkdir(parents=True, exist_ok=True)
                 (plugin_skill_dir / "SKILL.md").write_text("# Plugin skill\n", encoding="utf-8")
 
+        if claude_plugin_skills:
+            claude_plugins_root = claude_home / "plugins"
+            claude_plugins_root.mkdir(parents=True, exist_ok=True)
+            installed_plugins = []
+            for plugin_name, skill_names in claude_plugin_skills.items():
+                slug = f"{plugin_name}@test"
+                installed_plugins.append({"slug": slug, "name": plugin_name})
+                plugin_root = claude_plugins_root / slug
+                for skill_name in skill_names:
+                    plugin_skill_dir = plugin_root / "skills" / skill_name
+                    plugin_skill_dir.mkdir(parents=True, exist_ok=True)
+                    (plugin_skill_dir / "SKILL.md").write_text("# Claude plugin skill\n", encoding="utf-8")
+
+            (claude_plugins_root / "installed_plugins.json").write_text(
+                json.dumps({"installed_plugins": installed_plugins}, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(MODULE, "REPO_ROOT", root))
             stack.enter_context(patch.object(MODULE, "SOURCE_SKILLS_DIR", source_skills_dir))
             stack.enter_context(patch.object(MODULE, "TARGET_SKILLS_DIR", target_skills_dir))
             stack.enter_context(patch.object(MODULE, "SOURCE_AGENTS_DIR", claude_agents_dir))
             stack.enter_context(patch.object(MODULE, "TARGET_AGENTS_DIR", codex_agents_dir))
+            stack.enter_context(patch.object(MODULE, "USER_CLAUDE_HOME", claude_home))
             stack.enter_context(patch.object(MODULE, "USER_CODEX_HOME", user_codex_home))
             yield root
 
@@ -148,6 +169,123 @@ class SkillMigrationClassifierTests(unittest.TestCase):
             plan = MODULE.plan_skill_batch(["phase-worker"])
 
         self.assertEqual(plan.expanded_skills, ["phase-reviewer", "phase-worker"])
+
+    def test_execution_groups_are_topologically_ordered_by_dependency(self) -> None:
+        skill_packages = {
+            "alpha": {
+                "SKILL.md": make_skill(
+                    """
+                    Return to Skill('bravo') after review.
+                    """,
+                    name="alpha",
+                )
+            },
+            "bravo": {"SKILL.md": make_skill("# bravo", name="bravo")},
+        }
+
+        with temporary_repo(skill_packages):
+            plan = MODULE.plan_skill_batch(["alpha"])
+
+        self.assertEqual(plan.expanded_skills, ["alpha", "bravo"])
+        self.assertEqual(plan.execution_groups, [["bravo"], ["alpha"]])
+
+    def test_batch_aware_analysis_does_not_mark_same_batch_dependency_as_missing(self) -> None:
+        skill_packages = {
+            "main-skill": {
+                "SKILL.md": make_skill(
+                    """
+                    ## Step 1
+
+                    Use Skill('foo') before continuing with the migration.
+                    """,
+                    name="main-skill",
+                )
+            },
+            "foo": {"SKILL.md": make_skill("# Foo", name="foo")},
+        }
+
+        with temporary_repo(skill_packages):
+            result = MODULE.migrate_skill(
+                "main-skill",
+                dry_run=True,
+                analysis_only=True,
+                emit_text=False,
+            )
+
+        self.assertNotEqual(result.status, MODULE.STATUS_BLOCKED)
+        self.assertEqual(result.classification.missing_skills, [])
+
+    def test_claude_plugin_skill_dependency_is_planned_when_codex_parity_is_missing(self) -> None:
+        skill_packages = {
+            "main-skill": {
+                "SKILL.md": make_skill(
+                    """
+                    ## Step 1
+
+                    Use Skill('demo:helper') before continuing.
+                    """,
+                    name="main-skill",
+                )
+            }
+        }
+
+        with temporary_repo(skill_packages, claude_plugin_skills={"demo": ("helper",)}):
+            plugin_skills = set(
+                MODULE.discover_claude_plugin_skill_names(claude_home=MODULE.USER_CLAUDE_HOME)
+            )
+            classification = MODULE.classify_skill(
+                Path(MODULE.SOURCE_SKILLS_DIR) / "main-skill",
+                claude_plugin_skills=plugin_skills,
+            )
+
+        self.assertEqual(classification.missing_skills, [])
+        self.assertEqual(classification.planned_claude_plugin_skills, ["demo:helper"])
+
+    def test_live_run_installs_claude_plugin_skill_into_codex_home(self) -> None:
+        skill_packages = {
+            "main-skill": {
+                "SKILL.md": make_skill(
+                    """
+                    ## Step 1
+
+                    Use Skill('demo:helper') before continuing.
+                    """,
+                    name="main-skill",
+                )
+            }
+        }
+
+        with temporary_repo(skill_packages, claude_plugin_skills={"demo": ("helper",)}) as root:
+            result = MODULE.migrate_skill(
+                "main-skill",
+                dry_run=False,
+                analysis_only=False,
+                emit_text=False,
+                install_runtime=True,
+            )
+
+            self.assertEqual(result.status, MODULE.STATUS_REFACTOR_REQUIRED)
+            plugin_manifest = (
+                root
+                / "user-codex-home"
+                / "plugins"
+                / "claude-migrated"
+                / "demo"
+                / ".codex-plugin"
+                / "plugin.json"
+            )
+            plugin_skill = (
+                root
+                / "user-codex-home"
+                / "plugins"
+                / "claude-migrated"
+                / "demo"
+                / "skills"
+                / "helper"
+                / "SKILL.md"
+            )
+            self.assertTrue(plugin_manifest.exists())
+            self.assertTrue(plugin_skill.exists())
 
     def test_invalid_skill_identifier_with_path_separator_blocks_migration(self) -> None:
         skill_packages = {
