@@ -205,5 +205,29 @@ class ClaudeMdInstructionTests(unittest.TestCase):
             self.assertIn("a", rendered)
 
 
+class CommandRunnerTests(unittest.TestCase):
+    def test_run_allows_nonzero_when_requested(self) -> None:
+        mod = _import_sync_module()
+        with tempfile.TemporaryDirectory() as td:
+            mod._run(  # type: ignore[attr-defined]
+                [sys.executable, "-c", "raise SystemExit(3)"],
+                cwd=Path(td),
+                env=os.environ.copy(),
+                apply=True,
+                allow_nonzero=True,
+            )
+
+    def test_run_raises_on_nonzero_by_default(self) -> None:
+        mod = _import_sync_module()
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit):
+                mod._run(  # type: ignore[attr-defined]
+                    [sys.executable, "-c", "raise SystemExit(3)"],
+                    cwd=Path(td),
+                    env=os.environ.copy(),
+                    apply=True,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

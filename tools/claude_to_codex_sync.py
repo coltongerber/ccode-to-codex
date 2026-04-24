@@ -261,11 +261,19 @@ def _run(
     cwd: Path,
     env: dict[str, str],
     apply: bool,
+    allow_nonzero: bool = False,
 ) -> None:
     if not apply:
         return
     proc = subprocess.run(argv, cwd=str(cwd), env=env)
     if proc.returncode != 0:
+        if allow_nonzero:
+            print(
+                f"WARNING: command exited {proc.returncode}; continuing because nonzero exit is allowed: "
+                f"{' '.join(argv)}",
+                file=sys.stderr,
+            )
+            return
         raise SystemExit(proc.returncode)
 
 
@@ -532,7 +540,13 @@ def global_mode(args: argparse.Namespace) -> int:
     if run_agents:
         _run(agent_cmd, cwd=migration_repo, env=env, apply=True)
     if run_skills:
-        _run(skill_cmd, cwd=migration_repo, env=env, apply=True)
+        _run(
+            skill_cmd,
+            cwd=migration_repo,
+            env=env,
+            apply=True,
+            allow_nonzero=bool(args.continue_on_skill_blockers),
+        )
     _run(tracker_cmd, cwd=migration_repo, env=env, apply=True)
 
     output_plans = build_global_output_plans(
@@ -644,7 +658,13 @@ def repo_mode(args: argparse.Namespace) -> int:
     if agent_cmd:
         _run(agent_cmd, cwd=repo_root, env=env, apply=True)
     if skill_cmd:
-        _run(skill_cmd, cwd=repo_root, env=env, apply=True)
+        _run(
+            skill_cmd,
+            cwd=repo_root,
+            env=env,
+            apply=True,
+            allow_nonzero=bool(args.continue_on_skill_blockers),
+        )
     _run(tracker_cmd, cwd=repo_root, env=env, apply=True)
     return 0
 
@@ -674,6 +694,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--delete-outputs",
         action="store_true",
         help="When publishing, delete files in CODEX_HOME/{skills,agents} that are not in generated outputs (moved to trash).",
+    )
+    p_global.add_argument(
+        "--continue-on-skill-blockers",
+        action="store_true",
+        help="Continue to tracker/publish when skill migration exits nonzero because some skills need manual review or are blocked.",
     )
     p_global.add_argument(
         "--write-agents-md",
@@ -711,6 +736,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p_repo.add_argument("--agent", help="Migrate one agent (implies --all false).")
     p_repo.add_argument("--claude-home", help="Optional CLAUDE_HOME override for runtime/plugin discovery.")
     p_repo.add_argument("--codex-home", help="Optional CODEX_HOME override for runtime/plugin installs.")
+    p_repo.add_argument(
+        "--continue-on-skill-blockers",
+        action="store_true",
+        help="Continue to tracker when skill migration exits nonzero because some skills need manual review or are blocked.",
+    )
     repo_group = p_repo.add_mutually_exclusive_group()
     repo_group.add_argument(
         "--skills-only",
