@@ -61,14 +61,23 @@ def _ensure_hooks_payload(payload: object | None) -> dict[str, Any]:
 
 
 def merge_hook_commands(payload: object | None, commands: list[str]) -> dict[str, Any]:
-    """Merge hook commands into a generic `hooks.json` payload.
-
-    The validator walks for any nested `{"command": ...}` keys, so we keep a simple
-    top-level `hooks: [{command: ...}]` structure.
-    """
+    """Merge notification commands into Codex's event-keyed `hooks.json` shape."""
 
     merged = _ensure_hooks_payload(payload)
-    hooks = merged.get("hooks")
+    stop_groups = merged.get("Stop")
+    if not isinstance(stop_groups, list):
+        stop_groups = []
+
+    if stop_groups:
+        first_group = stop_groups[0]
+        if not isinstance(first_group, dict):
+            first_group = {}
+            stop_groups[0] = first_group
+    else:
+        first_group = {}
+        stop_groups.append(first_group)
+
+    hooks = first_group.get("hooks")
     if not isinstance(hooks, list):
         hooks = []
 
@@ -80,10 +89,11 @@ def merge_hook_commands(payload: object | None, commands: list[str]) -> dict[str
     for command in commands:
         if command in existing:
             continue
-        hooks.append({"command": command})
+        hooks.append({"type": "command", "command": command})
         existing.add(command)
 
-    merged["hooks"] = hooks
+    first_group["hooks"] = hooks
+    merged["Stop"] = stop_groups
     return merged
 
 

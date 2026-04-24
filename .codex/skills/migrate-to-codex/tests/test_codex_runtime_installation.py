@@ -19,6 +19,8 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from migration_support.codex_runtime import merge_hook_commands  # noqa: E402
+
 
 class CodexRuntimeInstallationTests(unittest.TestCase):
     def test_install_runtime_assets_writes_hook_and_script(self) -> None:
@@ -45,9 +47,40 @@ class CodexRuntimeInstallationTests(unittest.TestCase):
             self.assertTrue((codex_home / "notify.sh").exists())
             self.assertTrue((codex_home / "hooks.json").exists())
             self.assertIn(
+                '"Stop"',
+                (codex_home / "hooks.json").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                '"type": "command"',
+                (codex_home / "hooks.json").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
                 "superpowers@openai-curated",
                 (codex_home / "config.toml").read_text(encoding="utf-8"),
             )
+
+    def test_merge_hook_commands_preserves_existing_stop_hooks(self) -> None:
+        payload = {
+            "Stop": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "bash ~/.codex/existing.sh",
+                        }
+                    ]
+                }
+            ]
+        }
+
+        merged = merge_hook_commands(payload, ["bash ~/.codex/notify.sh"])
+
+        hooks = merged["Stop"][0]["hooks"]
+        self.assertEqual(
+            [hook["command"] for hook in hooks],
+            ["bash ~/.codex/existing.sh", "bash ~/.codex/notify.sh"],
+        )
+        self.assertEqual(hooks[1]["type"], "command")
 
 
 if __name__ == "__main__":
