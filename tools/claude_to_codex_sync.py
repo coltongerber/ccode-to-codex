@@ -489,10 +489,10 @@ def global_mode(args: argparse.Namespace) -> int:
         print(f"  - deletes: {len(plan.deletes)}")
 
     print("- would run:")
-    if run_skills:
-        print(f"  - {' '.join(skill_cmd)} (cwd={migration_repo})")
     if run_agents:
         print(f"  - {' '.join(agent_cmd)} (cwd={migration_repo})")
+    if run_skills:
+        print(f"  - {' '.join(skill_cmd)} (cwd={migration_repo})")
     print(f"  - {' '.join(tracker_cmd)} (cwd={migration_repo})")
 
     if args.publish_outputs:
@@ -511,10 +511,10 @@ def global_mode(args: argparse.Namespace) -> int:
     # Apply.
     for _label, plan, trash in input_plans:
         apply_mirror_plan(plan, trash_root=trash, apply=True)
-    if run_skills:
-        _run(skill_cmd, cwd=migration_repo, env=env, apply=True)
     if run_agents:
         _run(agent_cmd, cwd=migration_repo, env=env, apply=True)
+    if run_skills:
+        _run(skill_cmd, cwd=migration_repo, env=env, apply=True)
     _run(tracker_cmd, cwd=migration_repo, env=env, apply=True)
 
     output_plans = build_global_output_plans(
@@ -611,10 +611,10 @@ def repo_mode(args: argparse.Namespace) -> int:
         for a in tooling_actions:
             print(f"  - {a}")
     print("- would run:")
-    if skill_cmd:
-        print(f"  - {' '.join(skill_cmd)} (cwd={repo_root})")
     if agent_cmd:
         print(f"  - {' '.join(agent_cmd)} (cwd={repo_root})")
+    if skill_cmd:
+        print(f"  - {' '.join(skill_cmd)} (cwd={repo_root})")
     print(f"  - {' '.join(tracker_cmd)} (cwd={repo_root})")
     for p in written_instruction_paths:
         print(f"- would write: {p}")
@@ -623,10 +623,10 @@ def repo_mode(args: argparse.Namespace) -> int:
         print("\nDry-run only. Re-run with --apply to perform these actions.")
         return 0
 
-    if skill_cmd:
-        _run(skill_cmd, cwd=repo_root, env=env, apply=True)
     if agent_cmd:
         _run(agent_cmd, cwd=repo_root, env=env, apply=True)
+    if skill_cmd:
+        _run(skill_cmd, cwd=repo_root, env=env, apply=True)
     _run(tracker_cmd, cwd=repo_root, env=env, apply=True)
     return 0
 
