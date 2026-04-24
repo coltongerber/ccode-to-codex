@@ -220,6 +220,8 @@ def ensure_tooling_installed(
 
     src_support = toolkit_root / "tools" / "migration_support"
     dst_support = target_repo_root / "tools" / "migration_support"
+    src_config = toolkit_root / ".codex" / "config.toml"
+    dst_config = target_repo_root / ".codex" / "config.toml"
 
     needed_skills = (
         "migrate-to-codex",
@@ -239,6 +241,12 @@ def ensure_tooling_installed(
         # Install or update support library.
         actions.append("install tooling support lib: tools/migration_support")
         _copy_tree_minimal(src=src_support, dst=dst_support, apply=apply)
+
+    if src_config.exists() and (not dst_config.exists() or update):
+        actions.append("install tooling config: .codex/config.toml")
+        if apply:
+            dst_config.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_config, dst_config)
 
     return actions
 

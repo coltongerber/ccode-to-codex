@@ -121,6 +121,37 @@ class MirrorPlanningTests(unittest.TestCase):
             self.assertIn("skills/new-skill/SKILL.md", copy_targets)
             self.assertIn("agents/new-agent.toml", copy_targets)
 
+    def test_ensure_tooling_installs_baseline_codex_config(self) -> None:
+        mod = _import_sync_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            toolkit = root / "toolkit"
+            target = root / "target"
+            (toolkit / ".codex" / "config.toml").parent.mkdir(parents=True)
+            (toolkit / ".codex" / "config.toml").write_text("[agents]\n", encoding="utf-8")
+            for skill in (
+                "migrate-to-codex",
+                "migrate-agents-to-codex",
+                "verify-skill-migration",
+                "migration-dashboard",
+            ):
+                skill_dir = toolkit / ".codex" / "skills" / skill
+                skill_dir.mkdir(parents=True)
+                (skill_dir / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
+            support = toolkit / "tools" / "migration_support"
+            support.mkdir(parents=True)
+            (support / "__init__.py").write_text("", encoding="utf-8")
+
+            actions = mod.ensure_tooling_installed(
+                toolkit_root=toolkit,
+                target_repo_root=target,
+                apply=True,
+                update=False,
+            )
+
+            self.assertIn("install tooling config: .codex/config.toml", actions)
+            self.assertEqual((target / ".codex" / "config.toml").read_text(encoding="utf-8"), "[agents]\n")
+
 
 class ClaudeMdInstructionTests(unittest.TestCase):
     def test_discover_chain_and_render(self) -> None:
