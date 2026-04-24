@@ -99,6 +99,8 @@ python3 tools/migration_support/tracker.py --write
 python3 .codex/skills/migration-dashboard/scripts/analyze_migration.py --status
 python3 .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_codex.py
 python3 .codex/skills/migrate-agents-to-codex/tests/test_migrate_claude_agents_to_codex.py
+python3 tools/claude_to_codex_sync.py global
+python3 tools/claude_to_codex_sync.py repo --repo-root /path/to/target-repo
 ```
 
 ## How it fits with Codex CLI

@@ -110,6 +110,48 @@ python3 .codex/skills/migrate-to-codex/tests/test_migrate_claude_workflows_to_co
 python3 .codex/skills/migrate-agents-to-codex/tests/test_migrate_claude_agents_to_codex.py
 ```
 
+## Optional automation wrapper (global + repo sync)
+
+This repository also includes an **operator wrapper** script that can:
+
+- Mirror `~/.claude/{skills,agents}` into a dedicated migration workspace repo,
+  run the migrations there, then (optionally) publish results into
+  `~/.codex/{skills,agents}`.
+- Or run migrations in-place inside a normal project repo (repo mode).
+
+It is conservative by default: it prints a plan and exits unless you pass
+`--apply`.
+
+Global dry-run example:
+
+```bash
+python3 tools/claude_to_codex_sync.py global
+```
+
+Global apply + publish example:
+
+```bash
+python3 tools/claude_to_codex_sync.py global --apply --publish-outputs
+```
+
+Repo-mode dry-run example (auto-detect repo root):
+
+```bash
+python3 tools/claude_to_codex_sync.py repo --repo-root /path/to/repo
+```
+
+Repo-mode migrate one skill only:
+
+```bash
+python3 tools/claude_to_codex_sync.py repo --repo-root /path/to/repo --skill my-skill --skills-only --apply
+```
+
+Repo-mode migrate one agent only:
+
+```bash
+python3 tools/claude_to_codex_sync.py repo --repo-root /path/to/repo --agent my-agent --agents-only --apply
+```
+
 ## Running against a target repo
 
 The migration tooling is designed to operate against service-shaped target
