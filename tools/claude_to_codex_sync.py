@@ -324,6 +324,53 @@ def write_instructions_md(
     return str(out_path)
 
 
+def build_global_output_plans(
+    *,
+    migration_repo: Path,
+    codex_home: Path,
+    publish_outputs: bool,
+    delete_outputs: bool,
+    run_skills: bool,
+    run_agents: bool,
+) -> list[tuple[str, MirrorPlan, Path | None]]:
+    output_plans: list[tuple[str, MirrorPlan, Path | None]] = []
+    if not publish_outputs:
+        return output_plans
+
+    out_skill_src = migration_repo / ".codex" / "skills"
+    out_agent_src = migration_repo / ".codex" / "agents"
+    out_skill_dst = codex_home / "skills"
+    out_agent_dst = codex_home / "agents"
+
+    if run_skills:
+        output_plans.append(
+            (
+                f"publish skills: {out_skill_src} -> {out_skill_dst}",
+                plan_mirror_tree(
+                    src=out_skill_src,
+                    dst=out_skill_dst,
+                    delete=delete_outputs,
+                    refuse_symlinks=True,
+                ),
+                codex_home / ".trash",
+            )
+        )
+    if run_agents:
+        output_plans.append(
+            (
+                f"publish agents: {out_agent_src} -> {out_agent_dst}",
+                plan_mirror_tree(
+                    src=out_agent_src,
+                    dst=out_agent_dst,
+                    delete=delete_outputs,
+                    refuse_symlinks=True,
+                ),
+                codex_home / ".trash",
+            )
+        )
+    return output_plans
+
+
 def global_mode(args: argparse.Namespace) -> int:
     toolkit_root = _toolkit_root()
     claude_home = Path(args.claude_home).expanduser()
@@ -390,39 +437,16 @@ def global_mode(args: argparse.Namespace) -> int:
 
     tracker_cmd = [sys.executable, "tools/migration_support/tracker.py", "--write"]
 
-    # Mirror outputs into CODEX_HOME.
-    out_skill_src = migration_repo / ".codex" / "skills"
-    out_agent_src = migration_repo / ".codex" / "agents"
-    out_skill_dst = codex_home / "skills"
-    out_agent_dst = codex_home / "agents"
-
-    output_plans: list[tuple[str, MirrorPlan, Path | None]] = []
-    if args.publish_outputs and run_skills:
-        output_plans.append(
-            (
-                f"publish skills: {out_skill_src} -> {out_skill_dst}",
-                plan_mirror_tree(
-                    src=out_skill_src,
-                    dst=out_skill_dst,
-                    delete=bool(args.delete_outputs),
-                    refuse_symlinks=True,
-                ),
-                codex_home / ".trash",
-            )
-        )
-    if args.publish_outputs and run_agents:
-        output_plans.append(
-            (
-                f"publish agents: {out_agent_src} -> {out_agent_dst}",
-                plan_mirror_tree(
-                    src=out_agent_src,
-                    dst=out_agent_dst,
-                    delete=bool(args.delete_outputs),
-                    refuse_symlinks=True,
-                ),
-                codex_home / ".trash",
-            )
-        )
+    # Dry-run publish counts reflect already-generated outputs. During apply,
+    # recompute this after migration commands create/update the workspace outputs.
+    output_plans = build_global_output_plans(
+        migration_repo=migration_repo,
+        codex_home=codex_home,
+        publish_outputs=bool(args.publish_outputs),
+        delete_outputs=bool(args.delete_outputs),
+        run_skills=run_skills,
+        run_agents=run_agents,
+    )
 
     written_instruction_paths: list[str] = []
     if args.write_agents_md:
@@ -492,6 +516,15 @@ def global_mode(args: argparse.Namespace) -> int:
     if run_agents:
         _run(agent_cmd, cwd=migration_repo, env=env, apply=True)
     _run(tracker_cmd, cwd=migration_repo, env=env, apply=True)
+
+    output_plans = build_global_output_plans(
+        migration_repo=migration_repo,
+        codex_home=codex_home,
+        publish_outputs=bool(args.publish_outputs),
+        delete_outputs=bool(args.delete_outputs),
+        run_skills=run_skills,
+        run_agents=run_agents,
+    )
     for _label, plan, trash in output_plans:
         apply_mirror_plan(plan, trash_root=trash, apply=True)
     return 0

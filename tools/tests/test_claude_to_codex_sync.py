@@ -89,6 +89,38 @@ class MirrorPlanningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 mod.plan_mirror_tree(src=src, dst=dst, delete=False, refuse_symlinks=True)
 
+    def test_global_output_plans_use_current_generated_outputs(self) -> None:
+        mod = _import_sync_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            migration_repo = root / "migration"
+            codex_home = root / "codex"
+            generated_skill = migration_repo / ".codex" / "skills" / "new-skill" / "SKILL.md"
+            generated_agent = migration_repo / ".codex" / "agents" / "new-agent.toml"
+            generated_skill.parent.mkdir(parents=True)
+            generated_agent.parent.mkdir(parents=True)
+            generated_skill.write_text("---\nname: new-skill\n---\n", encoding="utf-8")
+            generated_agent.write_text('name = "new-agent"\n', encoding="utf-8")
+
+            plans = mod.build_global_output_plans(
+                migration_repo=migration_repo,
+                codex_home=codex_home,
+                publish_outputs=True,
+                delete_outputs=False,
+                run_skills=True,
+                run_agents=True,
+            )
+
+            labels = [label for label, _plan, _trash in plans]
+            copy_targets = [
+                dst.relative_to(codex_home).as_posix()
+                for _label, plan, _trash in plans
+                for _src, dst in plan.copies
+            ]
+            self.assertEqual(len(labels), 2)
+            self.assertIn("skills/new-skill/SKILL.md", copy_targets)
+            self.assertIn("agents/new-agent.toml", copy_targets)
+
 
 class ClaudeMdInstructionTests(unittest.TestCase):
     def test_discover_chain_and_render(self) -> None:
@@ -118,4 +150,3 @@ class ClaudeMdInstructionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
