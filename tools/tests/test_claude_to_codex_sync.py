@@ -89,6 +89,32 @@ class MirrorPlanningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 mod.plan_mirror_tree(src=src, dst=dst, delete=False, refuse_symlinks=True)
 
+    def test_plan_mirror_tree_excludes_backup_patterns_and_deletes_old_mirrors(self) -> None:
+        mod = _import_sync_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "src"
+            dst = root / "dst"
+            src.mkdir()
+            dst.mkdir()
+
+            (src / "agent.md").write_text("active", encoding="utf-8")
+            (src / "agent.original.md").write_text("backup", encoding="utf-8")
+            (dst / "agent.original.md").write_text("old backup", encoding="utf-8")
+
+            plan = mod.plan_mirror_tree(
+                src=src,
+                dst=dst,
+                delete=True,
+                refuse_symlinks=True,
+                exclude_patterns=("*.original.md",),
+            )
+
+            copy_rels = sorted([d.relative_to(dst).as_posix() for _s, d in plan.copies])
+            delete_rels = sorted([p.relative_to(dst).as_posix() for p in plan.deletes])
+            self.assertEqual(copy_rels, ["agent.md"])
+            self.assertEqual(delete_rels, ["agent.original.md"])
+
     def test_global_output_plans_use_current_generated_outputs(self) -> None:
         mod = _import_sync_module()
         with tempfile.TemporaryDirectory() as td:

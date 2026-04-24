@@ -25,6 +25,7 @@ Notes on CLAUDE.md:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import shutil
@@ -85,6 +86,7 @@ def plan_mirror_tree(
     dst: Path,
     delete: bool,
     refuse_symlinks: bool,
+    exclude_patterns: tuple[str, ...] = (),
 ) -> MirrorPlan:
     src = src.expanduser().resolve()
     dst = dst.expanduser().resolve()
@@ -100,6 +102,8 @@ def plan_mirror_tree(
         if refuse_symlinks and p.is_symlink():
             raise ValueError(f"Refusing to mirror symlinked file: {p}")
         rel = p.relative_to(src)
+        if any(fnmatch.fnmatch(rel.as_posix(), pattern) for pattern in exclude_patterns):
+            continue
         src_files[rel] = p
 
     dst_files: dict[Path, Path] = {}
@@ -419,7 +423,13 @@ def global_mode(args: argparse.Namespace) -> int:
         input_plans.append(
             (
                 f"mirror inputs: {src_agents} -> {dst_agents}",
-                plan_mirror_tree(src=src_agents, dst=dst_agents, delete=True, refuse_symlinks=True),
+                plan_mirror_tree(
+                    src=src_agents,
+                    dst=dst_agents,
+                    delete=True,
+                    refuse_symlinks=True,
+                    exclude_patterns=("*.original.md",),
+                ),
                 migration_repo / ".claude" / ".trash",
             )
         )
