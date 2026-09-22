@@ -6,3 +6,9 @@ __pycache__/
 .DS_Store
 sync-report.md
 AGENTS.md
+
+# Pushover-bearing notification hooks. The migrator writes a notify.sh with
+# live credentials inlined; this repo is public, so never track one.
+.codex/notify.sh
+**/notify.sh
+**/notify.env
